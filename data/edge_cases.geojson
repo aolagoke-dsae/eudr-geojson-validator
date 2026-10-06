@@ -1,0 +1,88 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "ProducerName": "Breach 1 - unclosed ring (TEST)",
+        "ProducerCountry": "CI",
+        "ProductionPlace": "unclosed"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-6.45183, 6.88412],
+          [-6.44921, 6.88407],
+          [-6.44915, 6.88183],
+          [-6.45179, 6.88188]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "ProducerName": "Breach 2 - interior ring (TEST)",
+        "ProducerCountry": "CI",
+        "ProductionPlace": "hole"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [[-6.46, 6.88], [-6.44, 6.88], [-6.44, 6.90], [-6.46, 6.90], [-6.46, 6.88]],
+          [[-6.455, 6.885], [-6.450, 6.885], [-6.450, 6.890], [-6.455, 6.890], [-6.455, 6.885]]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "ProducerName": "Breach 3 - excess precision (TEST)",
+        "ProducerCountry": "CI",
+        "ProductionPlace": "precision",
+        "Area": 1.0
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-6.4318812345, 6.8950233333]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "ProducerName": "Breach 4 - point above four hectares (TEST)",
+        "ProducerCountry": "CI",
+        "ProductionPlace": "too big for a point",
+        "Area": 11.8
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-6.41, 6.91]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "ProducerName": "Breach 5 - forbidden geometry (TEST)",
+        "ProducerCountry": "CI",
+        "ProductionPlace": "line"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [[-6.45, 6.88], [-6.44, 6.89]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "ProducerName": "Risk signal - coordinates reversed (TEST)",
+        "ProducerCountry": "CI",
+        "ProductionPlace": "latitude first",
+        "Area": 1.5
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [6.89502, -6.43011]
+      }
+    }
+  ]
+}

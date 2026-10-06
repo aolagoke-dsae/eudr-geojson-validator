@@ -1,0 +1,33 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -r requirements.txt
+      - name: Unit tests
+        run: python -m pytest -q
+
+      # The conformant fixture must pass.
+      - name: Conformant fixture is accepted
+        run: python -m src.validate_geojson data/valid_plots.geojson
+
+      # The broken fixture must keep failing. A validator that silently stops
+      # catching defects is worse than none, because it is trusted.
+      - name: Broken fixture is still rejected
+        run: |
+          if python -m src.validate_geojson data/edge_cases.geojson; then
+            echo "::error::edge_cases.geojson was accepted; the validator has regressed"
+            exit 1
+          fi

@@ -1,0 +1,6 @@
+# Runtime: none. The validator uses only the Python standard library,
+# which is deliberate -- a conformance checker should not need a
+# geospatial stack to answer whether a file matches a published schema.
+
+# Development
+pytest>=8.0.0
