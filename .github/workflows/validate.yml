@@ -11,8 +11,8 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements.txt
@@ -22,6 +22,9 @@ jobs:
       # The conformant fixture must pass.
       - name: Conformant fixture is accepted
         run: python -m src.validate_geojson data/valid_plots.geojson
+
+      - name: Conformant fixture is accepted under the Type II rules
+        run: python -m src.validate_geojson data/valid_plots.geojson --type II
 
       # The broken fixture must keep failing. A validator that silently stops
       # catching defects is worse than none, because it is trusted.

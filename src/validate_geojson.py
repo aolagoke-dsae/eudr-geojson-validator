@@ -1,6 +1,20 @@
 """Validate a GeoJSON file against the European Commission's
 EUDR GeoJSON File Description, version 1.5.
 
+Sources, checked 10 October 2026:
+  * EUDR GeoJSON File Description v1.5 (5 May 2025), and the EC's online
+    "GeoJSON file description", version 1.3 updated 29 May 2026:
+    https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html
+  * Regulation (EU) 2023/1115, Article 2(28): geolocation "using at least six
+    decimal digits"; polygons for plots of more than four hectares "other than
+    cattle".
+
+Version 1.0 of this module got two rules backwards. It rejected coordinates
+with more than six decimals, although the Regulation asks for AT LEAST six and
+the EU system truncates longer ones; and it required ProducerName and
+ProducerCountry in every file, although the EC lists both as optional except
+ProducerCountry in a Type II file. Version 1.1 follows the text above.
+
 Two kinds of finding are kept apart on purpose.
 
 ERROR   the file breaches the published specification. A system that accepts
@@ -19,13 +33,17 @@ import math
 import re
 import sys
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
 SPEC_VERSION = "1.5"
+VALIDATOR_VERSION = "1.1"
 MAX_FILE_BYTES = 25 * 1024 * 1024
-MAX_DECIMALS = 6
+SYSTEM_DECIMALS = 6   # the EU system truncates to six before storing
+MIN_DECIMALS = 6      # Regulation (EU) 2023/1115, Art. 2(28): "at least six"
+FILE_TYPES = ("I", "II")
+NUMBER = (int, float, Decimal)
 POINT_DEFAULT_AREA_HA = 4.0
 ALLOWED_GEOMETRY = ("Point", "MultiPoint", "Polygon", "MultiPolygon")
 EARTH_RADIUS_M = 6_371_008.8
@@ -92,6 +110,7 @@ class Finding:
 @dataclass
 class Report:
     findings: list[Finding] = field(default_factory=list)
+    file_type: str = "I"
 
     def add(self, code: str, severity: str, message: str, where: str = "") -> None:
         self.findings.append(Finding(code, severity, message, where))
@@ -114,6 +133,8 @@ class Report:
     def as_dict(self) -> dict[str, Any]:
         return {
             "spec_version": SPEC_VERSION,
+            "validator_version": VALIDATOR_VERSION,
+            "file_type": self.file_type,
             "conformant": self.ok,
             "error_count": len(self.errors),
             "warning_count": len(self.warnings),
@@ -125,10 +146,60 @@ class Report:
         }
 
 
-def _decimals(value: float | int | str) -> int:
-    """Count decimal places as written, not as float rounding leaves them."""
-    text = format(Decimal(str(value)), "f")
+def _decimals(value: float | int | Decimal) -> int:
+    """Decimal places as written in the file.
+
+    validate_file parses numbers as Decimal, which keeps the digits exactly as
+    written: "6.500000" has six places, "6.5" has one. A float -- validate_obj
+    called from Python -- carries no such record, so its shortest repr is the
+    best available reading. (v1.0 claimed to count "as written" while reading
+    floats, so 6.8950230 passed as six places.)
+    """
+    if isinstance(value, Decimal):
+        exponent = value.as_tuple().exponent
+        return -exponent if isinstance(exponent, int) and exponent < 0 else 0
+    if isinstance(value, int):
+        return 0
+    text = format(Decimal(repr(value)), "f")
     return len(text.split(".")[1]) if "." in text else 0
+
+
+def _as_decimal(value: float | int | Decimal) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(repr(value)) if isinstance(value, float) else Decimal(value)
+
+
+_SIX_PLACES = Decimal(1).scaleb(-SYSTEM_DECIMALS)
+
+
+def _collapse(positions: Any) -> tuple[int, int, str, tuple] | None:
+    """Two positions distinct as written that become one at six decimals.
+
+    The EC lists this among the errors its system raises: "Duplicate
+    coordinates due to 6 decimals rounding in the system". Its documentation
+    calls the reduction truncation in one place and rounding in another, so
+    both are tried. Positions already identical as written are a different
+    defect and are not reported here.
+    """
+    if not isinstance(positions, list):
+        return None
+    pts = [
+        (_as_decimal(p[0]), _as_decimal(p[1]))
+        for p in positions
+        if isinstance(p, (list, tuple)) and len(p) >= 2
+        and all(isinstance(v, NUMBER) and not isinstance(v, bool) for v in p[:2])
+    ]
+    for mode, label in ((ROUND_DOWN, "truncation"), (ROUND_HALF_UP, "rounding")):
+        seen: dict[tuple, int] = {}
+        for i, (lon, lat) in enumerate(pts):
+            key = (lon.quantize(_SIX_PLACES, rounding=mode),
+                   lat.quantize(_SIX_PLACES, rounding=mode))
+            j = seen.get(key)
+            if j is not None and pts[j] != (lon, lat):
+                return j, i, label, key
+            seen.setdefault(key, i)
+    return None
 
 
 def _ring_area_ha(ring: list[list[float]]) -> float:
@@ -171,7 +242,7 @@ def _check_position(pos: Any, report: Report, where: str) -> bool:
                    "Position must be an array of at least two numbers.", where)
         return False
     lon, lat = pos[0], pos[1]
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+    if not all(isinstance(v, NUMBER) and not isinstance(v, bool)
                for v in (lon, lat)):
         report.add("G010", SEVERITY_ERROR,
                    "Position values must be numbers.", where)
@@ -187,12 +258,6 @@ def _check_position(pos: Any, report: Report, where: str) -> bool:
                    f"Latitude {lat} is outside [-90, 90]. "
                    "A value above 90 usually means the pair is reversed.", where)
         ok = False
-    for value, name in ((lon, "longitude"), (lat, "latitude")):
-        if _decimals(value) > MAX_DECIMALS:
-            report.add("G013", SEVERITY_ERROR,
-                       f"{name} {value} carries more than {MAX_DECIMALS} "
-                       "decimal places.", where)
-            ok = False
     return ok
 
 
@@ -211,14 +276,50 @@ def _check_geometry(geometry: Any, report: Report, where: str) -> None:
         report.add("G008", SEVERITY_ERROR, "Geometry has no coordinates.", where)
         return
 
+    over: list = []
+    under: list = []
     for pos in _iter_positions(geometry):
-        _check_position(pos, report, where)
+        if _check_position(pos, report, where):
+            for value in pos[:2]:
+                places = _decimals(value)
+                if places > SYSTEM_DECIMALS:
+                    over.append(value)
+                elif places < MIN_DECIMALS:
+                    under.append(value)
+    # One finding per Feature, not one per vertex: a 5,000-vertex polygon
+    # exported at five decimals is one problem, not 10,000.
+    if over:
+        report.add("G013", SEVERITY_WARNING,
+                   f"{len(over)} coordinate value(s) carry more than "
+                   f"{SYSTEM_DECIMALS} decimal places (e.g. {over[0]}). The EU "
+                   f"system truncates to {SYSTEM_DECIMALS} before storing, so "
+                   "the extra digits are discarded.", where)
+    if under:
+        report.add("G029", SEVERITY_WARNING,
+                   f"{len(under)} coordinate value(s) are written with fewer "
+                   f"than {MIN_DECIMALS} decimal places (e.g. {under[0]}). "
+                   "Regulation (EU) 2023/1115, Art. 2(28), asks for at least "
+                   "six; if the trailing digits are genuinely zero, write them "
+                   "out.", where)
 
     if gtype == "Polygon":
         _check_rings(coords, report, where)
     elif gtype == "MultiPolygon":
         for p, polygon in enumerate(coords):
             _check_rings(polygon, report, f"{where}/polygon[{p}]")
+    elif gtype == "MultiPoint":
+        _report_collapse(_collapse(coords), report, where)
+
+
+def _report_collapse(hit: tuple | None, report: Report, where: str) -> None:
+    if hit:
+        j, i, label, key = hit
+        report.add("G028", SEVERITY_ERROR,
+                   f"Positions {j} and {i} differ as written but become the same "
+                   f"point, ({key[0]}, {key[1]}), after {label} to "
+                   f"{SYSTEM_DECIMALS} decimals. The EU system reduces "
+                   "coordinates to six decimals and rejects the duplicate.",
+                   where)
 
 
 def _check_rings(rings: Any, report: Report, where: str) -> None:
@@ -238,23 +339,49 @@ def _check_rings(rings: Any, report: Report, where: str) -> None:
         report.add("G016", SEVERITY_ERROR,
                    "Polygon ring is not closed: the last position must repeat "
                    "the first.", where)
+        _report_collapse(_collapse(outer), report, where)
+    else:
+        _report_collapse(_collapse(outer[:-1]), report, where)
 
 
-def _check_properties(props: Any, geometry: Any, report: Report, where: str) -> None:
-    if not isinstance(props, dict):
-        report.add("G017", SEVERITY_ERROR, "Feature has no properties object.", where)
+def _check_properties(feature: dict, geometry: Any, report: Report, where: str,
+                      file_type: str) -> None:
+    """ProducerName, ProducerCountry, ProductionPlace and Area are optional:
+    "The system additionally accepts and will process the following optional
+    properties". A Type I file "May include any of the optional properties";
+    a Type II file "Includes the "ProducerCountry" property per "Feature"".
+    (EC GeoJSON file description, 29 May 2026.)
+    """
+    if "properties" not in feature:
+        report.add("G017", SEVERITY_WARNING,
+                   "Feature has no 'properties' member. RFC 7946, section 3.2, "
+                   "requires one (an object, or null); the EC's own "
+                   "single-Feature example omits it, so the EU system evidently "
+                   "accepts this.", where)
+    props = feature.get("properties")
+    if props is None:
+        props = {}
+    elif not isinstance(props, dict):
+        report.add("G030", SEVERITY_ERROR,
+                   f"'properties' must be an object or null, found "
+                   f"{type(props).__name__}.", where)
         return
 
     country = props.get("ProducerCountry")
     if country is None:
-        report.add("G018", SEVERITY_ERROR, "ProducerCountry is required.", where)
+        if file_type == "II":
+            report.add("G018", SEVERITY_ERROR,
+                       "ProducerCountry is required in a Type II file, once per "
+                       "Feature.", where)
     elif not isinstance(country, str) or not ISO_3166_1_ALPHA2.match(country):
         report.add("G019", SEVERITY_ERROR,
                    f"ProducerCountry {country!r} is not an uppercase ISO 3166-1 "
                    "alpha-2 code.", where)
 
-    if props.get("ProducerName") in (None, ""):
-        report.add("G020", SEVERITY_ERROR, "ProducerName is required.", where)
+    if file_type == "II" and props.get("ProducerName") in (None, ""):
+        report.add("G020", SEVERITY_WARNING,
+                   "Type II files group producers by ProducerName and "
+                   "ProducerCountry; this Feature has no ProducerName.", where)
 
     gtype = geometry.get("type") if isinstance(geometry, dict) else None
     area = props.get("Area")
@@ -265,7 +392,7 @@ def _check_properties(props: Any, geometry: Any, report: Report, where: str) -> 
                        f"Point has no Area. The default of "
                        f"{POINT_DEFAULT_AREA_HA:g} ha will be assumed by the "
                        "receiving system.", where)
-        elif not isinstance(area, (int, float)) or isinstance(area, bool):
+        elif not isinstance(area, NUMBER) or isinstance(area, bool):
             report.add("G022", SEVERITY_ERROR, "Area must be a number.", where)
         elif area <= 0:
             report.add("G023", SEVERITY_ERROR,
@@ -276,7 +403,7 @@ def _check_properties(props: Any, geometry: Any, report: Report, where: str) -> 
                        "A plot above that threshold must be given as a polygon.",
                        where)
     elif gtype in ("Polygon", "MultiPolygon") and area is not None:
-        if not isinstance(area, (int, float)) or isinstance(area, bool):
+        if not isinstance(area, NUMBER) or isinstance(area, bool):
             report.add("G022", SEVERITY_ERROR, "Area must be a number.", where)
         else:
             measured = _measured_area_ha(geometry)
@@ -312,7 +439,7 @@ def _check_country_box(country: str, geometry: Any, report: Report, where: str) 
         if not isinstance(pos, (list, tuple)) or len(pos) < 2:
             continue
         lon, lat = pos[0], pos[1]
-        if not all(isinstance(v, (int, float)) for v in (lon, lat)):
+        if not all(isinstance(v, NUMBER) for v in (lon, lat)):
             continue
         if not (min_lon <= lon <= max_lon and min_lat <= lat <= max_lat):
             swapped = (min_lon <= lat <= max_lon and min_lat <= lon <= max_lat)
@@ -324,8 +451,12 @@ def _check_country_box(country: str, geometry: Any, report: Report, where: str) 
             return
 
 
-def validate_obj(obj: Any, report: Report | None = None) -> Report:
+def validate_obj(obj: Any, report: Report | None = None,
+                 file_type: str = "I") -> Report:
+    if file_type not in FILE_TYPES:
+        raise ValueError(f"file_type must be one of {FILE_TYPES}, not {file_type!r}")
     report = report or Report()
+    report.file_type = file_type
 
     if not isinstance(obj, dict):
         report.add("G001", SEVERITY_ERROR, "Top level must be a JSON object.")
@@ -353,10 +484,11 @@ def validate_obj(obj: Any, report: Report | None = None) -> Report:
             continue
         geometry = feature.get("geometry")
         _check_geometry(geometry, report, where)
-        _check_properties(feature.get("properties"), geometry, report, where)
+        _check_properties(feature, geometry, report, where, file_type)
 
         if isinstance(geometry, dict):
-            key = json.dumps(geometry.get("coordinates"), sort_keys=True)
+            key = json.dumps(geometry.get("coordinates"), sort_keys=True,
+                             default=float)
             if key in seen:
                 report.add("G027", SEVERITY_WARNING,
                            f"Geometry is identical to {seen[key]}.", where)
@@ -366,20 +498,31 @@ def validate_obj(obj: Any, report: Report | None = None) -> Report:
     return report
 
 
-def validate_file(path: str | Path) -> Report:
+def _reject_constant(name: str) -> None:
+    raise ValueError(f"{name} is not a JSON number (RFC 8259)")
+
+
+def validate_file(path: str | Path, file_type: str = "I") -> Report:
     path = Path(path)
-    report = Report()
+    report = Report(file_type=file_type)
     size = path.stat().st_size
     if size > MAX_FILE_BYTES:
         report.add("G000", SEVERITY_ERROR,
                    f"File is {size / 1024 / 1024:.1f} MB, above the 25 MB limit.")
         return report
     try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        report.add("G001", SEVERITY_ERROR, f"File is not UTF-8 text: {exc}")
+        return report
+    try:
+        # Decimal keeps every number exactly as written, which the precision
+        # rules need; NaN and Infinity are not JSON and are refused here.
+        obj = json.loads(text, parse_float=Decimal, parse_constant=_reject_constant)
+    except ValueError as exc:
         report.add("G001", SEVERITY_ERROR, f"File is not valid JSON: {exc}")
         return report
-    return validate_obj(obj, report)
+    return validate_obj(obj, report, file_type)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -394,16 +537,21 @@ def main(argv: list[str] | None = None) -> int:
                         help="emit the report as JSON")
     parser.add_argument("--strict", action="store_true",
                         help="treat warnings as failures")
+    parser.add_argument("--type", choices=FILE_TYPES, default="I",
+                        help="I: API or producer-level import, every property "
+                             "optional (default). II: commodity-level import, "
+                             "ProducerCountry required per Feature.")
     args = parser.parse_args(argv)
 
-    report = validate_file(args.path)
+    report = validate_file(args.path, args.type)
 
     if args.json:
         print(json.dumps(report.as_dict(), indent=2))
     else:
         for finding in report.findings:
             print(finding)
-        print(f"\n{len(report.errors)} error(s), {len(report.warnings)} warning(s).")
+        print(f"\n{len(report.errors)} error(s), {len(report.warnings)} warning(s); "
+              f"Type {args.type} rules.")
         print("conformant" if report.ok else "NOT conformant")
 
     if report.errors or (args.strict and report.warnings):
