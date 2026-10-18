@@ -1,9 +1,10 @@
 """Validate a GeoJSON file against the European Commission's
 EUDR GeoJSON File Description, version 1.5.
 
-Sources, checked 10 October 2026:
+Sources, checked 10 October 2026 and again on 18 October 2026:
   * EUDR GeoJSON File Description v1.5 (5 May 2025), and the EC's online
-    "GeoJSON file description", version 1.3 updated 29 May 2026:
+    "GeoJSON file description", version 1.3 updated 29 May 2026, with its
+    numbered list of the errors the EU system raises:
     https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html
   * Regulation (EU) 2023/1115, Article 2(28): geolocation "using at least six
     decimal digits"; polygons for plots of more than four hectares "other than
@@ -14,6 +15,13 @@ with more than six decimals, although the Regulation asks for AT LEAST six and
 the EU system truncates longer ones; and it required ProducerName and
 ProducerCountry in every file, although the EC lists both as optional except
 ProducerCountry in a Type II file. Version 1.1 follows the text above.
+
+Version 1.2 closes the gaps 1.1 listed: rings that cross, touch or fold back
+on themselves and rings with no area (the EC's errors 1, 2 and 6), property
+names in the wrong case (9), country codes that ISO 3166-1 does not assign
+(12), empty Multi* geometries, coordinates nested at the wrong depth, Area
+checked on every geometry type, and the Regulation's cattle exemption from the
+four-hectare rule.
 
 Two kinds of finding are kept apart on purpose.
 
@@ -30,15 +38,15 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import sys
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Iterable
 
 SPEC_VERSION = "1.5"
-VALIDATOR_VERSION = "1.1"
+VALIDATOR_VERSION = "1.2"
 MAX_FILE_BYTES = 25 * 1024 * 1024
 SYSTEM_DECIMALS = 6   # the EU system truncates to six before storing
 MIN_DECIMALS = 6      # Regulation (EU) 2023/1115, Art. 2(28): "at least six"
@@ -48,7 +56,31 @@ POINT_DEFAULT_AREA_HA = 4.0
 ALLOWED_GEOMETRY = ("Point", "MultiPoint", "Polygon", "MultiPolygon")
 EARTH_RADIUS_M = 6_371_008.8
 
-ISO_3166_1_ALPHA2 = re.compile(r"^[A-Z]{2}$")
+# ISO 3166-1 alpha-2: the 249 officially assigned codes, as listed by
+# pycountry 26.2.16 (Debian iso-codes), checked 18 October 2026. The EC asks
+# for "the country of production ISO2 code" and lists an invalid one among the
+# errors its system raises (item 12). v1.1 checked only the form, so XX passed.
+ISO_3166_1_ALPHA2 = frozenset("""
+AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF
+BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG
+CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC
+EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL
+GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN
+IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA
+LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN
+MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP
+NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO
+RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV
+SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG
+UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW
+""".split())
+# Codes that look right and are not ISO 3166-1, with the code that is. The EU
+# itself writes EL for Greece and UK for the United Kingdom.
+NOT_ISO_3166_1 = {"EL": "GR", "UK": "GB"}
+# User-assigned and outside ISO 3166-1, but the code the EU uses for Kosovo.
+EU_USER_ASSIGNED = {"XK": "Kosovo"}
+# Property names are case-sensitive (the EC's list of errors, item 9).
+KNOWN_PROPERTIES = ("ProducerName", "ProducerCountry", "ProductionPlace", "Area")
 
 # Bounding boxes (min_lon, min_lat, max_lon, max_lat) for countries that
 # appear in EUDR commodity supply chains. Used only to raise a warning when a
@@ -236,6 +268,149 @@ def _iter_positions(geometry: dict) -> Iterable[list[float]]:
                 yield from ring
 
 
+# How deep each geometry type nests its coordinates: a position is a list of
+# numbers, a ring a list of positions, a polygon a list of rings.
+_DEPTH = {"Point": 1, "MultiPoint": 2, "Polygon": 3, "MultiPolygon": 4}
+_SHAPE = {
+    "Point": "one position, [longitude, latitude], not an array of positions "
+             "(the EC's list of errors, item 14)",
+    "MultiPoint": "an array of positions",
+    "Polygon": "an array of rings, each an array of positions",
+    "MultiPolygon": "an array of polygons, each an array of rings",
+}
+
+
+def _nesting_ok(value: Any, depth: int) -> bool:
+    """True when value is a list nested exactly `depth` deep.
+
+    v1.1 walked the coordinates without looking first, so a Polygon given
+    [5] stopped the run with a TypeError instead of producing a finding.
+    """
+    if not isinstance(value, list):
+        return False
+    if depth == 1:
+        return not any(isinstance(v, (list, dict)) for v in value)
+    return all(_nesting_ok(v, depth - 1) for v in value)
+
+
+def _is_number(value: Any) -> bool:
+    """A finite number. NaN reaches here only through validate_obj: the file
+    reader refuses it as G001."""
+    if isinstance(value, bool) or not isinstance(value, NUMBER):
+        return False
+    return value.is_finite() if isinstance(value, Decimal) else math.isfinite(value)
+
+
+def _ring_points(ring: list) -> list[tuple] | None:
+    """Each position as (lon, lat, float lon, float lat), or None when one is
+    not a finite pair of numbers (that already carries G010, G011 or G012)."""
+    pts = []
+    for p in ring:
+        if not (isinstance(p, list) and len(p) >= 2 and _is_number(p[0])
+                and _is_number(p[1])):
+            return None
+        pts.append((p[0], p[1], float(p[0]), float(p[1])))
+    return pts
+
+
+def _orient(a: tuple, b: tuple, c: tuple) -> int:
+    """Sign of the turn a -> b -> c: 1 left, -1 right, 0 straight.
+
+    Exact. Floating point decides only where its error bound cannot change
+    the sign; elsewhere fractions of the numbers as written decide.
+    """
+    d1, d2, d3, d4 = b[2] - a[2], c[3] - a[3], b[3] - a[3], c[2] - a[2]
+    t1, t2 = d1 * d2, d3 * d4
+    v = t1 - t2
+    bound = 1e-12 * (abs(d1) + abs(d2) + abs(d3) + abs(d4)) + 1e-15 * (abs(t1) + abs(t2))
+    if v > bound:
+        return 1
+    if v < -bound:
+        return -1
+    f = Fraction
+    e = ((f(b[0]) - f(a[0])) * (f(c[1]) - f(a[1]))
+         - (f(b[1]) - f(a[1])) * (f(c[0]) - f(a[0])))
+    return (e > 0) - (e < 0)
+
+
+def _within(a: tuple, b: tuple, c: tuple) -> bool:
+    """c lies in the box spanned by a and b; with c on the line ab, on the side."""
+    return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0])
+            and min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+
+
+def _segments_meet(p1: tuple, p2: tuple, q1: tuple, q2: tuple) -> bool:
+    """Do the sides p1-p2 and q1-q2 share any point: cross, touch or overlap?"""
+    d1, d2 = _orient(q1, q2, p1), _orient(q1, q2, p2)
+    d3, d4 = _orient(p1, p2, q1), _orient(p1, p2, q2)
+    if d1 * d2 < 0 and d3 * d4 < 0:
+        return True
+    return ((d1 == 0 and _within(q1, q2, p1)) or (d2 == 0 and _within(q1, q2, p2))
+            or (d3 == 0 and _within(p1, p2, q1)) or (d4 == 0 and _within(p1, p2, q2)))
+
+
+def _ring_shape_problem(ring: list) -> tuple[str, str] | None:
+    """G032 for a closed ring with no area, G031 for one that crosses, touches
+    or folds back on itself, None for a simple ring.
+
+    The EC lists among the errors its system raises "crossing coordinate
+    lines", such as a figure eight (item 1), overlapping sides, including
+    inward-folding ones (item 2), and coordinates that represent straight lines
+    (item 6). The test is exact: floating point decides only where it cannot be
+    wrong, and the numbers as written, as fractions, decide the rest. So a ring
+    that just touches itself is found and one that just misses is not. Sides
+    are straight lines in longitude and latitude, which at plot scale is the
+    same as on the ground.
+    """
+    pts = _ring_points(ring)
+    if pts is None:
+        return None
+    v: list = []
+    for p in pts[:-1]:                 # the last position repeats the first
+        if not v or p != v[-1]:        # a repeated position adds no side
+            v.append(p)
+    while len(v) > 1 and v[-1] == v[0]:
+        v.pop()
+    if len(v) < 3 or all(_orient(v[0], v[1], p) == 0 for p in v[2:]):
+        return ("G032", "The ring's positions lie on one straight line, so it "
+                "encloses no area. The EC lists coordinates that represent "
+                "straight lines among the errors its system raises (item 6).")
+    n = len(v)
+    # Two sides that meet at a position overlap when the turn there is
+    # straight and the second side runs back along the first.
+    for i in range(n):
+        a, s, b = v[i - 1], v[i], v[(i + 1) % n]
+        if _orient(a, s, b) != 0:
+            continue
+        f = Fraction
+        back = ((f(a[0]) - f(s[0])) * (f(b[0]) - f(s[0]))
+                + (f(a[1]) - f(s[1])) * (f(b[1]) - f(s[1])))
+        if back > 0:
+            return ("G031", f"The ring folds back on itself at its position "
+                    f"{i}: two sides overlap. The EC lists overlapping sides "
+                    "among the errors its system raises (item 2).")
+    # Sides that do not share a position must not meet at all. Sweeping the
+    # sides by longitude keeps a detailed polygon from costing n² exact tests.
+    edges = [(v[i], v[(i + 1) % n]) for i in range(n)]
+    lo = [min(e[0][2], e[1][2]) for e in edges]
+    hi = [max(e[0][2], e[1][2]) for e in edges]
+    order = sorted(range(n), key=lo.__getitem__)
+    for k, i in enumerate(order):
+        reach = hi[i] + 1e-9           # a margin over float rounding keeps exact touches in
+        for j in order[k + 1:]:
+            if lo[j] > reach:
+                break
+            if abs(i - j) in (1, n - 1):
+                continue
+            if _segments_meet(*edges[i], *edges[j]):
+                first, second = sorted((i, j))
+                return ("G031", f"The ring crosses or touches itself: sides "
+                        f"{first} and {second} meet. The EC lists crossing lines, "
+                        "such as a figure eight, among the errors its system "
+                        "raises (item 1).")
+    return None
+
+
 def _check_position(pos: Any, report: Report, where: str) -> bool:
     if not isinstance(pos, (list, tuple)) or len(pos) < 2:
         report.add("G010", SEVERITY_ERROR,
@@ -261,20 +436,32 @@ def _check_position(pos: Any, report: Report, where: str) -> bool:
     return ok
 
 
-def _check_geometry(geometry: Any, report: Report, where: str) -> None:
+def _check_geometry(geometry: Any, report: Report, where: str) -> bool:
+    """Structure and precision. Returns True when the coordinates are nested
+    as the geometry type requires, so later checks may walk them."""
     if not isinstance(geometry, dict):
         report.add("G006", SEVERITY_ERROR, "Feature has no geometry object.", where)
-        return
+        return False
     gtype = geometry.get("type")
     if gtype not in ALLOWED_GEOMETRY:
         report.add("G007", SEVERITY_ERROR,
                    f"Geometry type {gtype!r} is not permitted. "
                    f"Allowed: {', '.join(ALLOWED_GEOMETRY)}.", where)
-        return
+        return False
     coords = geometry.get("coordinates")
     if coords is None:
         report.add("G008", SEVERITY_ERROR, "Geometry has no coordinates.", where)
-        return
+        return False
+    if not _nesting_ok(coords, _DEPTH[gtype]):
+        report.add("G009", SEVERITY_ERROR,
+                   f"Coordinates are not nested as a {gtype} requires: "
+                   f"{_SHAPE[gtype]}.", where)
+        return False
+    if gtype in ("MultiPoint", "MultiPolygon") and not coords:
+        # v1.1 passed this with no finding at all.
+        report.add("G008", SEVERITY_ERROR,
+                   f"{gtype} has no members, so it gives no location.", where)
+        return False
 
     over: list = []
     under: list = []
@@ -309,6 +496,7 @@ def _check_geometry(geometry: Any, report: Report, where: str) -> None:
             _check_rings(polygon, report, f"{where}/polygon[{p}]")
     elif gtype == "MultiPoint":
         _report_collapse(_collapse(coords), report, where)
+    return True
 
 
 def _report_collapse(hit: tuple | None, report: Report, where: str) -> None:
@@ -342,10 +530,14 @@ def _check_rings(rings: Any, report: Report, where: str) -> None:
         _report_collapse(_collapse(outer), report, where)
     else:
         _report_collapse(_collapse(outer[:-1]), report, where)
+        problem = _ring_shape_problem(outer)
+        if problem:
+            report.add(problem[0], SEVERITY_ERROR, problem[1], where)
 
 
 def _check_properties(feature: dict, geometry: Any, report: Report, where: str,
-                      file_type: str) -> None:
+                      file_type: str, walkable: bool = True,
+                      cattle: bool = False) -> None:
     """ProducerName, ProducerCountry, ProductionPlace and Area are optional:
     "The system additionally accepts and will process the following optional
     properties". A Type I file "May include any of the optional properties";
@@ -367,16 +559,35 @@ def _check_properties(feature: dict, geometry: Any, report: Report, where: str,
                    f"{type(props).__name__}.", where)
         return
 
+    # Names are case-sensitive; the system ignores other names, so only a
+    # wrongly cased known one is reported.
+    for key in props:
+        for name in KNOWN_PROPERTIES:
+            if isinstance(key, str) and key != name and key.lower() == name.lower():
+                report.add("G033", SEVERITY_ERROR,
+                           f"Property {key!r} must be spelled {name!r}: property "
+                           "names are case-sensitive, and the EC lists a wrongly "
+                           "cased one among the errors its system raises "
+                           "(item 9).", where)
+
     country = props.get("ProducerCountry")
     if country is None:
         if file_type == "II":
             report.add("G018", SEVERITY_ERROR,
                        "ProducerCountry is required in a Type II file, once per "
                        "Feature.", where)
-    elif not isinstance(country, str) or not ISO_3166_1_ALPHA2.match(country):
+    elif isinstance(country, str) and country in EU_USER_ASSIGNED:
+        report.add("G034", SEVERITY_WARNING,
+                   f"ProducerCountry {country!r} ({EU_USER_ASSIGNED[country]}) is a "
+                   "user-assigned code the EU uses, not an ISO 3166-1 code. Check "
+                   "that the receiving system accepts it.", where)
+    elif not isinstance(country, str) or country not in ISO_3166_1_ALPHA2:
+        hint = (f" ISO 3166-1 writes {NOT_ISO_3166_1[country]}."
+                if isinstance(country, str) and country in NOT_ISO_3166_1 else "")
         report.add("G019", SEVERITY_ERROR,
-                   f"ProducerCountry {country!r} is not an uppercase ISO 3166-1 "
-                   "alpha-2 code.", where)
+                   f"ProducerCountry {country!r} is not an ISO 3166-1 alpha-2 "
+                   f"code.{hint} The EC lists an invalid producer country code "
+                   "among the errors its system raises (item 12).", where)
 
     if file_type == "II" and props.get("ProducerName") in (None, ""):
         report.add("G020", SEVERITY_WARNING,
@@ -386,34 +597,46 @@ def _check_properties(feature: dict, geometry: Any, report: Report, where: str,
     gtype = geometry.get("type") if isinstance(geometry, dict) else None
     area = props.get("Area")
 
-    if gtype in ("Point", "MultiPoint"):
-        if area is None:
-            report.add("G021", SEVERITY_WARNING,
-                       f"Point has no Area. The default of "
-                       f"{POINT_DEFAULT_AREA_HA:g} ha will be assumed by the "
-                       "receiving system.", where)
-        elif not isinstance(area, NUMBER) or isinstance(area, bool):
-            report.add("G022", SEVERITY_ERROR, "Area must be a number.", where)
+    # G022 and G023 hold for every geometry type; v1.1 checked a polygon's
+    # Area for being a number only, so -5 passed.
+    area_ok = False
+    if area is not None:
+        if not _is_number(area):
+            quoted = (" A quoted number reads as an area of 0 (the EC's list of "
+                      "errors, item 14)." if isinstance(area, str) else "")
+            report.add("G022", SEVERITY_ERROR,
+                       f"Area must be a finite number.{quoted}", where)
         elif area <= 0:
             report.add("G023", SEVERITY_ERROR,
                        f"Area {area} must be greater than zero.", where)
-        elif area > POINT_DEFAULT_AREA_HA:
-            report.add("G024", SEVERITY_ERROR,
-                       f"Area {area} ha exceeds {POINT_DEFAULT_AREA_HA:g} ha. "
-                       "A plot above that threshold must be given as a polygon.",
-                       where)
-    elif gtype in ("Polygon", "MultiPolygon") and area is not None:
-        if not isinstance(area, NUMBER) or isinstance(area, bool):
-            report.add("G022", SEVERITY_ERROR, "Area must be a number.", where)
         else:
-            measured = _measured_area_ha(geometry)
-            if measured > 0 and (area > measured * 2 or area < measured / 2):
-                report.add("G025", SEVERITY_WARNING,
-                           f"Declared Area {area:g} ha differs from the geometry's "
-                           f"own area of {measured:.2f} ha by more than a factor "
-                           "of two.", where)
+            area_ok = True
 
-    if isinstance(country, str) and ISO_3166_1_ALPHA2.match(country or ""):
+    if gtype in ("Point", "MultiPoint") and area is None:
+        report.add("G021", SEVERITY_WARNING,
+                   f"Point has no Area. The default of "
+                   f"{POINT_DEFAULT_AREA_HA:g} ha will be assumed by the "
+                   "receiving system.", where)
+    # The four-hectare rule is the Regulation's, not the specification's, and
+    # it exempts cattle. A GeoJSON file does not say which commodity it
+    # serves, so the exemption is the user's to state (--cattle). It applies
+    # to a Point: the EC defines Area for a Point, not for a MultiPoint.
+    if gtype == "Point" and area_ok and area > POINT_DEFAULT_AREA_HA and not cattle:
+        report.add("G024", SEVERITY_ERROR,
+                   f"Area {area} ha exceeds {POINT_DEFAULT_AREA_HA:g} ha. "
+                   "Regulation (EU) 2023/1115, Art. 2(28), requires polygons for "
+                   "plots of more than four hectares used for commodities other "
+                   "than cattle. If this file describes cattle establishments, "
+                   "run with --cattle.", where)
+    if gtype in ("Polygon", "MultiPolygon") and area_ok and walkable:
+        measured = _measured_area_ha(geometry)
+        if measured > 0 and (area > measured * 2 or area < measured / 2):
+            report.add("G025", SEVERITY_WARNING,
+                       f"Declared Area {area:g} ha differs from the geometry's "
+                       f"own area of {measured:.2f} ha by more than a factor "
+                       "of two.", where)
+
+    if walkable and isinstance(country, str) and country in ISO_3166_1_ALPHA2:
         _check_country_box(country, geometry, report, where)
 
 
@@ -452,7 +675,9 @@ def _check_country_box(country: str, geometry: Any, report: Report, where: str) 
 
 
 def validate_obj(obj: Any, report: Report | None = None,
-                 file_type: str = "I") -> Report:
+                 file_type: str = "I", cattle: bool = False) -> Report:
+    """Validate a parsed GeoJSON object. cattle=True states that the file
+    describes cattle establishments, which Art. 2(28) exempts from G024."""
     if file_type not in FILE_TYPES:
         raise ValueError(f"file_type must be one of {FILE_TYPES}, not {file_type!r}")
     report = report or Report()
@@ -483,8 +708,9 @@ def validate_obj(obj: Any, report: Report | None = None,
                        "Each element of 'features' must be a Feature.", where)
             continue
         geometry = feature.get("geometry")
-        _check_geometry(geometry, report, where)
-        _check_properties(feature, geometry, report, where, file_type)
+        walkable = _check_geometry(geometry, report, where)
+        _check_properties(feature, geometry, report, where, file_type,
+                          walkable, cattle)
 
         if isinstance(geometry, dict):
             key = json.dumps(geometry.get("coordinates"), sort_keys=True,
@@ -502,7 +728,8 @@ def _reject_constant(name: str) -> None:
     raise ValueError(f"{name} is not a JSON number (RFC 8259)")
 
 
-def validate_file(path: str | Path, file_type: str = "I") -> Report:
+def validate_file(path: str | Path, file_type: str = "I",
+                  cattle: bool = False) -> Report:
     path = Path(path)
     report = Report(file_type=file_type)
     size = path.stat().st_size
@@ -522,7 +749,7 @@ def validate_file(path: str | Path, file_type: str = "I") -> Report:
     except ValueError as exc:
         report.add("G001", SEVERITY_ERROR, f"File is not valid JSON: {exc}")
         return report
-    return validate_obj(obj, report, file_type)
+    return validate_obj(obj, report, file_type, cattle)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -531,7 +758,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="validate_geojson",
         description=f"Validate a GeoJSON file against EUDR GeoJSON File "
-                    f"Description v{SPEC_VERSION}.")
+                    f"Description v{SPEC_VERSION}.",
+        epilog="Exit status: 0 the file passes; 1 it breaches the "
+               "specification, or raises a warning under --strict; 2 the "
+               "command line is wrong or the file cannot be read.")
     parser.add_argument("path")
     parser.add_argument("--json", action="store_true",
                         help="emit the report as JSON")
@@ -541,22 +771,40 @@ def main(argv: list[str] | None = None) -> int:
                         help="I: API or producer-level import, every property "
                              "optional (default). II: commodity-level import, "
                              "ProducerCountry required per Feature.")
+    parser.add_argument("--cattle", action="store_true",
+                        help="the file describes establishments where cattle are "
+                             "kept: Regulation (EU) 2023/1115, Art. 2(28), does "
+                             "not require polygons for them, so G024 is not "
+                             "applied")
     args = parser.parse_args(argv)
 
-    report = validate_file(args.path, args.type)
+    try:
+        report = validate_file(args.path, args.type, cattle=args.cattle)
+    except OSError as exc:
+        print(f"validate_geojson: cannot read {args.path}: {exc.strerror or exc}",
+              file=sys.stderr)
+        return 2
+    failed = bool(report.errors) or (args.strict and bool(report.warnings))
 
     if args.json:
-        print(json.dumps(report.as_dict(), indent=2))
+        out = report.as_dict()
+        out.update({"strict": args.strict, "cattle": args.cattle,
+                    "passed": not failed})
+        print(json.dumps(out, indent=2))
     else:
         for finding in report.findings:
             print(finding)
         print(f"\n{len(report.errors)} error(s), {len(report.warnings)} warning(s); "
               f"Type {args.type} rules.")
-        print("conformant" if report.ok else "NOT conformant")
-
-    if report.errors or (args.strict and report.warnings):
-        return 1
-    return 0
+        # v1.1 printed "conformant" here and still exited 1 under --strict.
+        if report.errors:
+            print("NOT conformant")
+        elif failed:
+            print(f"conformant, but rejected under --strict: "
+                  f"{len(report.warnings)} warning(s)")
+        else:
+            print("conformant")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

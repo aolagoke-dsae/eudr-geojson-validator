@@ -79,6 +79,37 @@
     {
       "type": "Feature",
       "properties": {
+        "ProducerName": "Breach 6 - figure-eight ring (TEST)",
+        "ProducerCountry": "CI",
+        "ProductionPlace": "crossing sides"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-6.441830, 6.874120],
+          [-6.439210, 6.871830],
+          [-6.439210, 6.874120],
+          [-6.441830, 6.871830],
+          [-6.441830, 6.874120]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "ProducerName": "Breach 7 - a country code ISO 3166-1 does not assign (TEST)",
+        "ProducerCountry": "UK",
+        "ProductionPlace": "the EU's spelling of GB",
+        "Area": 1.0
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-6.420000, 6.920000]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
         "ProducerName": "Risk signal - coordinates reversed (TEST)",
         "ProducerCountry": "CI",
         "ProductionPlace": "latitude first",
