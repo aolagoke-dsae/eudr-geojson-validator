@@ -28,7 +28,7 @@ rejected.
 ## Install and run
 
 ```bash
-pip install git+https://github.com/aolagoke-dsae/eudr-geojson-validator
+pip install eudr-geojson-validator
 eudr-validate my_plots.geojson
 ```
 
@@ -327,7 +327,7 @@ the validator, its samples or the demo change.
 **1.3.0 — 10 November 2026.** A package with its own command, a browser demo,
 and two tracebacks turned into answers:
 
-- installable with pip, with the command `eudr-validate`;
+- on PyPI as `eudr-geojson-validator`, with the command `eudr-validate`;
   `python -m eudr_geojson_validator` works too, and so, for now, does
   `python -m src.validate_geojson`;
 - the version is the validator's own. 1.2 reported `"spec_version": "1.5"`,
