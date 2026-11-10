@@ -3,34 +3,66 @@ name: validate
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "23 5 * * 1"    # Mondays: a new Python or pytest release shows up here first
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Every Python the package claims (requires-python >= 3.10), on Linux and
+    # on Windows, where compliance teams are likely to run it.
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements.txt
+      - run: pip install ".[test]"
       - name: Unit tests
         run: python -m pytest -q
 
-      # The conformant fixture must pass.
+      # The installed command, as a user calls it. The conformant fixture must pass.
       - name: Conformant fixture is accepted
-        run: python -m src.validate_geojson data/valid_plots.geojson
+        run: eudr-validate data/valid_plots.geojson
 
       - name: Conformant fixture is accepted under the Type II rules
-        run: python -m src.validate_geojson data/valid_plots.geojson --type II
+        run: eudr-validate data/valid_plots.geojson --type II
 
-      # The broken fixture must keep failing. A validator that silently stops
+      # The broken fixture must keep failing, and with 1, the code for a file
+      # that breaches the specification. A validator that silently stops
       # catching defects is worse than none, because it is trusted.
       - name: Broken fixture is still rejected
         run: |
-          if python -m src.validate_geojson data/edge_cases.geojson; then
-            echo "::error::edge_cases.geojson was accepted; the validator has regressed"
+          set +e
+          eudr-validate data/edge_cases.geojson
+          code=$?
+          if [ "$code" -ne 1 ]; then
+            echo "::error::edge_cases.geojson gave exit code $code, not 1"
             exit 1
           fi
+
+  package:
+    # What PyPI would receive: the sdist and the wheel build, the wheel
+    # installs into an empty environment, and its command runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - name: The wheel installs and its command runs
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/clean/bin/eudr-validate --version
+          /tmp/clean/bin/eudr-validate "$GITHUB_WORKSPACE/data/valid_plots.geojson"
