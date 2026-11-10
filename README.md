@@ -74,7 +74,7 @@ Feature without a `ProducerName` raises a warning there.
 | Code | Severity | Check |
 |---|---|---|
 | G000 | error | File above the 25 MB limit |
-| G001 | error | Not UTF-8 text, not valid JSON, or containing `NaN` / `Infinity` |
+| G001 | error | Not UTF-8 text, not valid JSON, containing `NaN` / `Infinity`, or nested more than 100 levels deep (a geometry needs eight) |
 | G002 | error | Top-level type is not `FeatureCollection` |
 | G003 / G004 | error | `features` missing, not an array, or empty |
 | G005 | error | Element of `features` is not a `Feature` |
@@ -202,7 +202,7 @@ is to catch a misplaced decimal, not to argue about surveying.
 
 ```bash
 pip install -e ".[test]"
-python -m pytest -q        # 87 passed
+python -m pytest -q        # 91 passed
 ```
 
 Most tests hold the specification and the Regulation, each beside the text it
@@ -212,7 +212,7 @@ fixtures. `data/edge_cases.geojson` contains eight deliberate defects, and CI
 asserts that it **keeps failing**. A validator that silently stops catching
 things is worse than no validator, because it is trusted.
 
-`tools/mutants.py` holds 55 mutants of the validator, copies with one rule
+`tools/mutants.py` holds 59 mutants of the validator, copies with one rule
 reverted or weakened, and runs the suite against each: every mutant makes at
 least one test fail (10 November 2026). Twelve of them survived the suite of
 1.2, among them latitudes up to 91, booleans read as coordinates, and a ring

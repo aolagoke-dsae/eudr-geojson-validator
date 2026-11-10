@@ -44,6 +44,7 @@ import sys
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from fractions import Fraction
+from itertools import accumulate
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -733,10 +734,31 @@ def _reject_constant(name: str) -> None:
 
 # A file nested more deeply than Python's JSON reader follows stopped 1.2 with
 # a RecursionError traceback and exit code 1, which a pipeline reads as a
-# verdict on the file. Such a file is not conforming GeoJSON, so it is one.
-TOO_DEEP = ("File nests arrays or objects more deeply than can be followed; "
-            "a geometry nests eight levels at most, so this is not conforming "
-            "GeoJSON.")
+# verdict on the file. Catching that error is not enough: where it comes
+# depends on the Python (near 1,000 levels in 3.10, between 5,000 and 10,000
+# in 3.13), and in the browser's Python, Pyodide, it never comes, because the
+# browser's stack runs out first, between 1,000 and 3,000 levels in Chromium,
+# and takes Python with it. So the depth is measured before the file is
+# parsed, and a file nested more deeply than MAX_DEPTH is not parsed: the same
+# answer on every platform. A geometry needs eight levels.
+MAX_DEPTH = 100
+TOO_DEEP = ("File nests arrays or objects {depth:,} levels deep. This validator "
+            "reads no file nested more than {limit} levels deep, and a geometry "
+            "needs eight.")
+_NOT_BRACKETS = bytes(set(range(256)) - set(b"[]{}"))
+_STEP = {ord("["): 1, ord("{"): 1, ord("]"): -1, ord("}"): -1}
+
+
+def _depth(text: str) -> int:
+    """How deeply text nests arrays and objects, measured without parsing it.
+    Brackets inside strings do not count: escaped backslashes and escaped
+    quotes are set aside, and what lies between the remaining quotes is a
+    string. String methods, not regular expressions, which took four times
+    as long on a 15 MB file."""
+    unescaped = text.replace("\\\\", "").replace('\\"', "")
+    outside = "".join(unescaped.split('"')[::2])
+    brackets = outside.encode("utf-8").translate(None, _NOT_BRACKETS)
+    return max(accumulate(map(_STEP.__getitem__, brackets)), default=0)
 
 
 def validate_file(path: str | Path, file_type: str = "I",
@@ -753,6 +775,10 @@ def validate_file(path: str | Path, file_type: str = "I",
     except UnicodeDecodeError as exc:
         report.add("G001", SEVERITY_ERROR, f"File is not UTF-8 text: {exc}")
         return report
+    depth = _depth(text)
+    if depth > MAX_DEPTH:
+        report.add("G001", SEVERITY_ERROR, TOO_DEEP.format(depth=depth, limit=MAX_DEPTH))
+        return report
     try:
         # Decimal keeps every number exactly as written, which the precision
         # rules need; NaN and Infinity are not JSON and are refused here.
@@ -760,14 +786,7 @@ def validate_file(path: str | Path, file_type: str = "I",
     except ValueError as exc:
         report.add("G001", SEVERITY_ERROR, f"File is not valid JSON: {exc}")
         return report
-    except RecursionError:
-        report.add("G001", SEVERITY_ERROR, TOO_DEEP)
-        return report
-    try:
-        return validate_obj(obj, report, file_type, cattle)
-    except RecursionError:           # nesting the reader followed, but only just
-        report.add("G001", SEVERITY_ERROR, TOO_DEEP)
-        return report
+    return validate_obj(obj, report, file_type, cattle)
 
 
 def main(argv: list[str] | None = None) -> int:

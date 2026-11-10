@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 
 from eudr_geojson_validator.validate import (
-    _measured_area_ha, _orient, _segments_meet, main, validate_file, validate_obj,
+    MAX_DEPTH, _depth, _measured_area_ha, _orient, _segments_meet, main,
+    validate_file, validate_obj,
 )
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -619,22 +620,58 @@ def test_deep_nesting_is_a_finding_not_a_traceback(tmp_path, capsys):
     verdict on the file."""
     path = write(tmp_path, "[" * 100_000 + "]" * 100_000)
     assert path.stat().st_size == 200_000
-    assert validate_file(path).codes() == {"G001"}
+    report = validate_file(path)
+    assert report.codes() == {"G001"}
+    assert "100,000 levels deep" in report.errors[0].message
     assert main([str(path)]) == 1
     out = capsys.readouterr()
     assert "G001" in out.out and out.out.rstrip().endswith("NOT conformant")
     assert "Traceback" not in out.err
 
 
-@pytest.mark.parametrize("depth", [400, 980])
-def test_deep_nesting_inside_the_coordinates(tmp_path, depth):
-    """One depth the reader follows easily, one close to where it stops."""
-    coords = "[" * depth + "1.5, 2.5" + "]" * depth
-    path = write(tmp_path, '{"type": "FeatureCollection", "features": [{"type": '
+def nested_polygon(tmp_path, depth):
+    """A file nested depth levels deep: four levels down to the coordinates,
+    which take the rest."""
+    k = depth - 4
+    coords = "[" * k + "1.5, 2.5" + "]" * k
+    return write(tmp_path, '{"type": "FeatureCollection", "features": [{"type": '
                  '"Feature", "properties": {}, "geometry": {"type": "Polygon", '
                  '"coordinates": %s}}]}' % coords)
+
+
+@pytest.mark.parametrize("depth", [MAX_DEPTH + 1, 980, 20_000])
+def test_nesting_beyond_the_limit_is_not_parsed(tmp_path, depth):
+    """The limit is the validator's own, so the answer does not depend on
+    where a Python's reader gives up: near 1,000 levels in 3.10, beyond 5,000
+    in 3.13, and in the browser's Python not before Chromium's stack runs out."""
+    path = nested_polygon(tmp_path, depth)
+    assert _depth(path.read_text(encoding="utf-8")) == depth
     report = validate_file(path)
-    assert not report.ok and report.codes() & {"G001", "G009"}
+    assert report.codes() == {"G001"}
+    assert f"{depth:,} levels deep" in report.errors[0].message
+
+
+def test_nesting_up_to_the_limit_is_read(tmp_path):
+    path = nested_polygon(tmp_path, MAX_DEPTH)
+    assert _depth(path.read_text(encoding="utf-8")) == MAX_DEPTH
+    assert validate_file(path).codes() == {"G009"}
+
+
+def test_depth_counts_arrays_and_objects_outside_strings():
+    assert _depth('{"a": [1, {"b": [2]}]}') == 4
+    assert _depth('"[[[[{"') == 0
+    assert _depth('["\\"]", [[]]]') == 3     # an escaped quote does not end a string
+    assert _depth('["\\\\", [[]]]') == 3     # nor does an escaped backslash escape it
+    assert _depth("") == 0
+
+
+def test_brackets_inside_strings_are_not_nesting(tmp_path):
+    """A name may hold brackets, and an escaped quote does not end it."""
+    feature = {"type": "Feature",
+               "properties": {"ProducerName": "[" * 300 + '"' + "{" * 300},
+               "geometry": {"type": "Point", "coordinates": [-5.123456, 6.123456]}}
+    path = write(tmp_path, json.dumps(collection(feature)))
+    assert "G001" not in validate_file(path).codes()
 
 
 def test_a_fault_in_the_validator_exits_3_not_1(monkeypatch, capsys):
