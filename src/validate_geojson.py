@@ -728,6 +728,14 @@ def _reject_constant(name: str) -> None:
     raise ValueError(f"{name} is not a JSON number (RFC 8259)")
 
 
+# A file nested more deeply than Python's JSON reader follows stopped 1.2 with
+# a RecursionError traceback and exit code 1, which a pipeline reads as a
+# verdict on the file. Such a file is not conforming GeoJSON, so it is one.
+TOO_DEEP = ("File nests arrays or objects more deeply than can be followed; "
+            "a geometry nests eight levels at most, so this is not conforming "
+            "GeoJSON.")
+
+
 def validate_file(path: str | Path, file_type: str = "I",
                   cattle: bool = False) -> Report:
     path = Path(path)
@@ -749,7 +757,14 @@ def validate_file(path: str | Path, file_type: str = "I",
     except ValueError as exc:
         report.add("G001", SEVERITY_ERROR, f"File is not valid JSON: {exc}")
         return report
-    return validate_obj(obj, report, file_type, cattle)
+    except RecursionError:
+        report.add("G001", SEVERITY_ERROR, TOO_DEEP)
+        return report
+    try:
+        return validate_obj(obj, report, file_type, cattle)
+    except RecursionError:           # nesting the reader followed, but only just
+        report.add("G001", SEVERITY_ERROR, TOO_DEEP)
+        return report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -761,7 +776,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"Description v{SPEC_VERSION}.",
         epilog="Exit status: 0 the file passes; 1 it breaches the "
                "specification, or raises a warning under --strict; 2 the "
-               "command line is wrong or the file cannot be read.")
+               "command line is wrong or the file cannot be read; 3 the "
+               "validator itself failed, which says nothing about the file.")
     parser.add_argument("path")
     parser.add_argument("--json", action="store_true",
                         help="emit the report as JSON")
@@ -781,9 +797,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = validate_file(args.path, args.type, cattle=args.cattle)
     except OSError as exc:
-        print(f"validate_geojson: cannot read {args.path}: {exc.strerror or exc}",
+        print(f"{parser.prog}: cannot read {args.path}: {exc.strerror or exc}",
               file=sys.stderr)
         return 2
+    except Exception as exc:         # a fault in the validator, not in the file
+        print(f"{parser.prog}: internal error ({type(exc).__name__}: {exc}). "
+              "This says nothing about the file; please report it.",
+              file=sys.stderr)
+        return 3
     failed = bool(report.errors) or (args.strict and bool(report.warnings))
 
     if args.json:

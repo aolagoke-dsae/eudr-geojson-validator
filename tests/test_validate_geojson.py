@@ -609,6 +609,42 @@ def test_exit_codes(tmp_path, capsys):
     assert exc.value.code == 2
 
 
+def test_deep_nesting_is_a_finding_not_a_traceback(tmp_path, capsys):
+    """A reviewer's 200 KB file of nested brackets stopped 1.2 with a
+    RecursionError traceback and exit code 1, which a pipeline reads as a
+    verdict on the file."""
+    path = write(tmp_path, "[" * 100_000 + "]" * 100_000)
+    assert path.stat().st_size == 200_000
+    assert validate_file(path).codes() == {"G001"}
+    assert main([str(path)]) == 1
+    out = capsys.readouterr()
+    assert "G001" in out.out and out.out.rstrip().endswith("NOT conformant")
+    assert "Traceback" not in out.err
+
+
+@pytest.mark.parametrize("depth", [400, 980])
+def test_deep_nesting_inside_the_coordinates(tmp_path, depth):
+    """One depth the reader follows easily, one close to where it stops."""
+    coords = "[" * depth + "1.5, 2.5" + "]" * depth
+    path = write(tmp_path, '{"type": "FeatureCollection", "features": [{"type": '
+                 '"Feature", "properties": {}, "geometry": {"type": "Polygon", '
+                 '"coordinates": %s}}]}' % coords)
+    report = validate_file(path)
+    assert not report.ok and report.codes() & {"G001", "G009"}
+
+
+def test_a_fault_in_the_validator_exits_3_not_1(monkeypatch, capsys):
+    """A bug in the validator must not read as a verdict on the file."""
+    import src.validate_geojson as V
+
+    def broken(*args, **kwargs):
+        raise KeyError("a bug")
+    monkeypatch.setattr(V, "validate_obj", broken)
+    assert V.main([str(DATA / "valid_plots.geojson")]) == 3
+    err = capsys.readouterr().err
+    assert "internal error" in err and "says nothing about the file" in err
+
+
 def test_json_output_states_the_verdict(capsys):
     main([str(DATA / "valid_plots.geojson"), "--json", "--strict"])
     out = json.loads(capsys.readouterr().out)

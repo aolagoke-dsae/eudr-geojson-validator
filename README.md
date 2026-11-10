@@ -23,6 +23,7 @@ python -m src.validate_geojson my_herds.geojson --cattle   # cattle: no polygon 
 | `0` | The file passes: no error, and no warning under `--strict` |
 | `1` | The file breaches the specification, or raises a warning under `--strict` |
 | `2` | The command line is wrong, or the file cannot be read |
+| `3` | The validator itself failed: an internal error, which says nothing about the file |
 
 With `--strict` and warnings only, the last line says so — `conformant, but
 rejected under --strict` — instead of the bare `conformant` that 1.1 printed
