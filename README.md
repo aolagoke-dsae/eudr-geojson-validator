@@ -1,12 +1,17 @@
 # eudr-geojson-validator
 
 Checks a GeoJSON file against the European Commission's **EUDR GeoJSON File
-Description, version 1.5** — the format in which geolocation data for
-commodity plots is submitted under Regulation (EU) 2023/1115 — and against the
-Regulation's own definition of geolocation in Article 2(28). The rules follow
-the EC's online [GeoJSON file description](https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html)
-(version 1.3, updated 29 May 2026), checked on 10 October 2026 and again on
-18 October 2026.
+Description** — the format in which geolocation data for commodity plots is
+submitted under Regulation (EU) 2023/1115 — and against the Regulation's own
+definition of geolocation in Article 2(28).
+
+The Commission publishes the description twice, with separate version
+numbers: as a PDF, version 1.5, dated 5 May 2025, and online in the EUDR
+Information System's API reference, [version 1.3, updated 29 May 2026](https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html).
+This validator started from the PDF and follows the online version, the newer
+of the two, wherever they differ; its numbered list of errors is the one the
+codes below cite. The online version was checked on 10 and 18 October 2026,
+and on 10 November 2026 it was still version 1.3.
 
 [![validate](https://github.com/aolagoke-dsae/eudr-geojson-validator/actions/workflows/validate.yml/badge.svg)](https://github.com/aolagoke-dsae/eudr-geojson-validator/actions/workflows/validate.yml)
 

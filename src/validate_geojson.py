@@ -1,10 +1,12 @@
 """Validate a GeoJSON file against the European Commission's
-EUDR GeoJSON File Description, version 1.5.
+EUDR GeoJSON File Description, in its online version 1.3 (29 May 2026).
 
-Sources, checked 10 October 2026 and again on 18 October 2026:
-  * EUDR GeoJSON File Description v1.5 (5 May 2025), and the EC's online
-    "GeoJSON file description", version 1.3 updated 29 May 2026, with its
-    numbered list of the errors the EU system raises:
+Sources, checked 10 October and 18 October 2026; the online version was
+unchanged on 10 November 2026:
+  * the EC publishes the GeoJSON File Description twice, with separate version
+    numbers: as a PDF, version 1.5 (5 May 2025), and online, version 1.3
+    (updated 29 May 2026), with its numbered list of the errors the EU system
+    raises. Where they differ, the online version, the newer, is followed:
     https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html
   * Regulation (EU) 2023/1115, Article 2(28): geolocation "using at least six
     decimal digits"; polygons for plots of more than four hectares "other than
@@ -45,7 +47,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Iterable
 
-SPEC_VERSION = "1.5"
+# Named in full: the PDF and the online page carry separate version numbers.
+SPECIFICATION = "EUDR GeoJSON File Description, online version 1.3 (29 May 2026)"
 VALIDATOR_VERSION = "1.2"
 MAX_FILE_BYTES = 25 * 1024 * 1024
 SYSTEM_DECIMALS = 6   # the EU system truncates to six before storing
@@ -164,7 +167,7 @@ class Report:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "spec_version": SPEC_VERSION,
+            "specification": SPECIFICATION,
             "validator_version": VALIDATOR_VERSION,
             "file_type": self.file_type,
             "conformant": self.ok,
@@ -772,8 +775,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="validate_geojson",
-        description=f"Validate a GeoJSON file against EUDR GeoJSON File "
-                    f"Description v{SPEC_VERSION}.",
+        description=f"Validate a GeoJSON file against the {SPECIFICATION}.",
         epilog="Exit status: 0 the file passes; 1 it breaches the "
                "specification, or raises a warning under --strict; 2 the "
                "command line is wrong or the file cannot be read; 3 the "

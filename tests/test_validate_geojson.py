@@ -650,6 +650,9 @@ def test_json_output_states_the_verdict(capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["conformant"] is True and out["passed"] is False
     assert out["strict"] is True and out["validator_version"] == "1.2"
+    # Named in full: the EC's PDF and online page carry separate version numbers.
+    assert out["specification"] == ("EUDR GeoJSON File Description, online "
+                                    "version 1.3 (29 May 2026)")
 
 
 def test_the_cli_applies_the_cattle_exemption(tmp_path):
