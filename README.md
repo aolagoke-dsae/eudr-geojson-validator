@@ -137,9 +137,21 @@ is exact: floating point decides only where it cannot be wrong, and the
 numbers as written decide the rest. So a ring that only just touches itself is
 found, and one that misses by a millionth of a degree is not. Sides are
 straight lines in longitude and latitude, which at plot scale is the same as
-on the ground. Checked against Shapely on 1,500 random rings, simple and not,
-the two agree on every one. A ring of 5,000 positions takes a fifth of a
-second, and a 6 MB file of 10,000 polygons validates in about five seconds.
+on the ground.
+
+`tools/compare_shapely.py` checks this against Shapely on 1,500 random rings
+on a grid, simple and not. Given the grid's integers, where floating point is
+exact, the two agree on every ring. Given the six-decimal coordinates,
+Shapely passes 13 rings the validator flags: each is degenerate exactly as
+written and not in binary floating point, where 6.8003 is not quite 6.8003.
+The validator decides on the numbers as written.
+
+`tools/timing.py` writes its own files and times the check on them. On a
+laptop (Intel Core i7-1165G7, Python 3.10, in a Linux virtual machine) on
+10 November 2026: 10,000 polygons of 30 corners, 7.9 MB, in 13 seconds;
+40,000 polygons of 10 corners, 14.5 MB, in 15 seconds; one ring of 5,000
+positions in 0.4 seconds. The README of 1.2 gave faster figures, from files
+and a machine it did not record.
 
 ## The four-hectare rule and cattle
 
@@ -189,8 +201,8 @@ is to catch a misplaced decimal, not to argue about surveying.
 ## Tests
 
 ```bash
-pip install -r requirements.txt
-python -m pytest -q        # 69 passed
+pip install -e ".[test]"
+python -m pytest -q        # 87 passed
 ```
 
 Most tests hold the specification and the Regulation, each beside the text it
@@ -200,10 +212,14 @@ fixtures. `data/edge_cases.geojson` contains eight deliberate defects, and CI
 asserts that it **keeps failing**. A validator that silently stops catching
 things is worse than no validator, because it is trusted.
 
-The tests were checked against 50 mutants of the validator, copies with one
-rule reverted or weakened: every mutant makes at least one test fail. An audit
-of version 1.0 found 35 of its 48 mutants surviving, among them an area
-computation multiplied by ten.
+`tools/mutants.py` holds 55 mutants of the validator, copies with one rule
+reverted or weakened, and runs the suite against each: every mutant makes at
+least one test fail (10 November 2026). Twelve of them survived the suite of
+1.2, among them latitudes up to 91, booleans read as coordinates, and a ring
+that touches itself where the touching side happens to be tested first; each
+has a test now. The 50 mutants 1.2 was checked against were not kept, which is
+why the set is a script now. An audit of version 1.0 found 35 of its 48
+mutants surviving, among them an area computation multiplied by ten.
 
 `data/valid_plots.geojson` uses clearly-labelled test identities. It is not
 derived from any real operator.

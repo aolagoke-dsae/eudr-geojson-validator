@@ -1,4 +1,4 @@
-"""Sixty-nine tests.
+"""Eighty-seven tests.
 
 Most hold the specification and the Regulation, each beside the text it
 follows. Version 1.0 got two rules backwards: it rejected coordinates with
@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from eudr_geojson_validator.validate import (
-    EARTH_RADIUS_M, _measured_area_ha, main, validate_file, validate_obj,
+    _measured_area_ha, _orient, _segments_meet, main, validate_file, validate_obj,
 )
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -561,7 +561,9 @@ def test_the_area_of_a_known_rectangle():
     """A rectangle between two meridians and two parallels has a closed-form
     area on the sphere, R² · Δλ · (sin φ2 − sin φ1). v1.0's area had no
     effective test: multiplying it by ten passed the suite."""
-    want = (EARTH_RADIUS_M ** 2 * math.radians(0.003)
+    # The radius written out, 6,371,008.8 m, the IUGG mean: computed from the
+    # module's own constant, the test could not see the constant change.
+    want = (6_371_008.8 ** 2 * math.radians(0.003)
             * (math.sin(math.radians(6.884)) - math.sin(math.radians(6.881)))) / 10_000
     got = _measured_area_ha({"type": "Polygon", "coordinates": [RECT]})
     assert got == pytest.approx(want, rel=1e-9)
@@ -724,3 +726,91 @@ def test_the_version_names_the_validator_and_the_document(capsys):
     assert " ".join(capsys.readouterr().out.split()) == (
         "eudr-validate 1.3.0; EUDR GeoJSON File Description, online version 1.3 "
         "(29 May 2026)")
+
+
+
+# ── what tools/mutants.py found untested, 10 November 2026 ─────────────────
+# Twelve of its 55 mutants survived the suite of 1.2; each test below fails
+# against one of them.
+
+def test_a_boolean_is_not_a_coordinate():
+    """JSON true is the integer 1 to Python; G010 must not take it."""
+    f = base_feature()
+    f["geometry"]["coordinates"] = [True, 6.895021]
+    assert "G010" in errors(collection(f))
+
+
+def test_a_latitude_beyond_90_is_rejected_and_90_is_not():
+    f = base_feature()
+    f["properties"].pop("ProducerCountry")      # no country box in the way
+    f["geometry"]["coordinates"] = [-6.430112, 90.5]
+    assert "G012" in errors(collection(f))
+    f["geometry"]["coordinates"] = [-6.430112, 90.0]
+    assert "G012" not in errors(collection(f))
+
+
+def test_type_ii_warns_about_an_empty_producer_name():
+    f = base_feature()
+    f["properties"]["ProducerName"] = ""
+    assert "G020" in warnings(collection(f), file_type="II")
+    assert "G020" not in warnings(collection(f))
+
+
+def test_a_multipoint_without_area_warns_about_the_default():
+    f = base_feature()
+    f["properties"].pop("Area")
+    f["geometry"] = {"type": "MultiPoint",
+                     "coordinates": [[-6.430112, 6.895021], [-6.430212, 6.895121]]}
+    assert "G021" in warnings(collection(f))
+
+
+def test_a_plot_north_of_its_country_warns():
+    """Côte d'Ivoire's longitude with a latitude in Mali."""
+    f = base_feature()
+    f["geometry"]["coordinates"] = [-6.430112, 20.895021]
+    assert "G026" in warnings(collection(f))
+
+
+def multipoint(*positions):
+    f = base_feature()
+    f["geometry"] = {"type": "MultiPoint", "coordinates": [list(p) for p in positions]}
+    return collection(f)
+
+
+def test_g028_finds_positions_that_only_truncation_merges():
+    """-6.4301001 and -6.4301009 truncate to -6.430100 but round apart."""
+    hit = multipoint((-6.4301001, 6.8950001), (-6.4301009, 6.8950009))
+    assert "G028" in errors(hit)
+
+
+def test_g028_finds_positions_that_only_rounding_merges():
+    """6.8950004 and 6.8949996 round to 6.895000 but truncate apart."""
+    hit = multipoint((-6.4301004, 6.8950004), (-6.4300996, 6.8949996))
+    assert "G028" in errors(hit)
+
+
+def test_positions_identical_as_written_are_not_a_collapse():
+    assert "G028" not in errors(multipoint((-6.430112, 6.895021), (-6.430112, 6.895021)))
+
+
+def test_a_list_is_not_a_properties_object():
+    f = base_feature()
+    f["properties"] = ["ProducerCountry", "CI"]
+    assert "G030" in errors(collection(f))
+
+
+def test_a_vertex_on_a_side_is_found_whichever_side_comes_first():
+    def p(x, y):
+        return (x, y, float(x), float(y))
+    side, touching = (p(0, 0), p(4, 0)), (p(2, 0), p(3, 3))   # (2, 0) lies on the side
+    assert _segments_meet(*side, *touching) and _segments_meet(*touching, *side)
+
+
+def test_a_turn_too_fine_for_floating_point_is_decided_exactly():
+    """1.000001 × 0.999999 − 1 × 1 = −10⁻¹², inside floating point's error
+    bound, so the numbers as written decide: the turn is to the right."""
+    from decimal import Decimal as D
+
+    def p(x, y):
+        return (D(x), D(y), float(x), float(y))
+    assert _orient(p("0", "0"), p("1.000001", "1"), p("1", "0.999999")) == -1
