@@ -1,0 +1,4 @@
+# The sdist carries what its tests need: the two fixtures, and the shim
+# behind `python -m src.validate_geojson`, which a test still runs.
+include data/valid_plots.geojson data/edge_cases.geojson
+include src/__init__.py src/validate_geojson.py

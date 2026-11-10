@@ -50,7 +50,8 @@ jobs:
 
   package:
     # What PyPI would receive: the sdist and the wheel build, the wheel
-    # installs into an empty environment, and its command runs.
+    # installs into an empty environment and its command runs, and the
+    # sdist's own tests pass.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -66,3 +67,10 @@ jobs:
           cd /tmp
           /tmp/clean/bin/eudr-validate --version
           /tmp/clean/bin/eudr-validate "$GITHUB_WORKSPACE/data/valid_plots.geojson"
+      - name: The sdist carries its tests and what they need, and they pass
+        run: |
+          mkdir /tmp/sdist
+          tar -xzf dist/*.tar.gz -C /tmp/sdist
+          cd /tmp/sdist/eudr_geojson_validator-*
+          pip install pytest
+          python -m pytest -q
