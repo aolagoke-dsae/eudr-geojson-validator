@@ -1,0 +1,60 @@
+name: pages
+
+# Publishes the browser demo in web/, with the package's own modules and the two
+# sample files, to GitHub Pages. The tests run first, on Python 3.14, the version
+# Pyodide 314.0.7 runs in the browser, so the demo never ships code that fails them.
+# Needs Settings > Pages > Build and deployment > Source: GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "eudr_geojson_validator/**"
+      - "data/**"
+      - "tests/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Test
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[test]"
+          python -m pytest -q
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/eudr_geojson_validator _site/data
+          cp web/index.html web/worker.js _site/
+          cp eudr_geojson_validator/__init__.py eudr_geojson_validator/validate.py _site/eudr_geojson_validator/
+          cp data/valid_plots.geojson data/edge_cases.geojson _site/data/
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

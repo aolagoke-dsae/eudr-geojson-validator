@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EUDR GeoJSON validator</title>
+<meta name="description" content="Check an EUDR geolocation file against the European Commission's GeoJSON File Description, in your browser. The file never leaves it.">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #6b6a66;
+    --line: #e1e0d9;
+    --axis: #c3c2b7;
+    --accent: #2a78d6;
+    --plain: #2a78d6;          /* a feature with no finding */
+    --critical: #d03b3b;       /* status: error */
+    --warning: #fab219;        /* status: warning */
+    --warning-ink: #8a5a00;    /* the warning glyph beside text */
+    --warning-line: #8a5a00;   /* amber alone is too faint on a light surface */
+    --warning-ring: #8a5a00;
+    --good: #006300;
+    --ring: rgba(11, 11, 11, 0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --muted: #a3a29b;
+      --line: #2c2c2a;
+      --axis: #484844;
+      --accent: #3987e5;
+      --plain: #3987e5;
+      --warning-ink: #fab219;
+      --warning-line: #fab219;
+      --warning-ring: #1a1a19;
+      --good: #0ca30c;
+      --ring: rgba(255, 255, 255, 0.10);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #a3a29b;
+    --line: #2c2c2a;
+    --axis: #484844;
+    --accent: #3987e5;
+    --plain: #3987e5;
+    --warning-ink: #fab219;
+    --warning-line: #fab219;
+    --warning-ring: #1a1a19;
+    --good: #0ca30c;
+    --ring: rgba(255, 255, 255, 0.10);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 26px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  p { margin: 0 0 10px; }
+  a { color: var(--accent); }
+  code { font-size: 0.92em; }
+  [hidden] { display: none !important; }
+  .lede { color: var(--ink-2); max-width: 780px; }
+  .privacy {
+    color: var(--ink-2); max-width: 780px; font-size: 14px;
+    border-left: 3px solid var(--axis); padding-left: 10px;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
+    padding: 16px; margin-top: 16px;
+  }
+  .drop {
+    position: relative;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px;
+    min-height: 96px; padding: 16px; text-align: center;
+    border: 1.5px dashed var(--axis); border-radius: 8px; color: var(--ink-2); cursor: pointer;
+  }
+  .drop.over, .drop:focus-within { border-color: var(--accent); color: var(--ink); }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .button, button {
+    font: inherit; font-size: 14px; color: var(--ink); background: var(--page);
+    border: 1px solid var(--axis); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+  }
+  .button:hover, button:hover { border-color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 12px; }
+  .row .label { color: var(--muted); font-size: 13px; }
+  fieldset { border: 0; padding: 0; margin: 14px 0 0; display: grid; gap: 6px; }
+  legend { color: var(--muted); font-size: 13px; padding: 0; margin-bottom: 4px; }
+  fieldset label { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
+  #status { min-height: 1.5em; margin: 14px 0 0; color: var(--ink-2); font-size: 14px; }
+  .verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 17px; font-weight: 600; }
+  .verdict .sub { font-weight: 400; color: var(--ink-2); font-size: 14px; }
+  .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%; font-size: 15px; font-weight: 700; flex: none;
+  }
+  .badge.ok { background: var(--good); color: #ffffff; }
+  .badge.error { background: var(--critical); color: #ffffff; }
+  .badge.warning { background: var(--warning); color: #0b0b0b; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .panes { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 16px; margin-top: 14px; }
+  @media (max-width: 820px) { .panes { grid-template-columns: minmax(0, 1fr); } }
+  figure { margin: 0; }
+  #map { width: 100%; height: auto; display: block; background: var(--surface);
+         border: 1px solid var(--line); border-radius: 8px; forced-color-adjust: none; }
+  #map .shape { cursor: pointer; }
+  #map .error { --c: var(--critical); }
+  #map .warning { --c: var(--warning); --edge: var(--warning-line); }
+  #map .none { --c: var(--plain); }
+  #map .area { fill: var(--c); fill-opacity: 0.22; fill-rule: evenodd; stroke: var(--edge, var(--c));
+               stroke-width: 1.5; stroke-linejoin: round; }
+  #map .error .area { stroke-width: 2; }
+  #map .warning .area { stroke-width: 2; stroke-dasharray: 5 3; }
+  #map .mark { fill: var(--c); stroke: var(--surface); stroke-width: 2; }
+  #map .warning .mark { stroke: var(--warning-ring); stroke-width: 1.5; }
+  #map .shape:hover .area { fill-opacity: 0.4; }
+  #map .selected .area { stroke-width: 3.5; fill-opacity: 0.4; }
+  #map .selected .mark { stroke: var(--ink); }
+  figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+  .key { display: inline-flex; align-items: center; gap: 5px; }
+  .key svg { forced-color-adjust: none; }
+  .key .error { fill: var(--critical); }
+  .key .warning { fill: var(--warning); stroke: var(--warning-ring); stroke-width: 1; }
+  .key .none { fill: var(--plain); }
+  #view-button { margin-left: auto; padding: 2px 10px; font-size: 13px; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .table-wrap { max-height: 560px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { position: sticky; top: 0; background: var(--surface); text-align: left; font-weight: 600;
+       color: var(--ink-2); border-bottom: 1px solid var(--axis); padding: 7px 10px; }
+  td { border-bottom: 1px solid var(--line); padding: 7px 10px; vertical-align: top; }
+  tbody tr[data-feature] { cursor: pointer; }
+  tbody tr:hover, tbody tr.selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  td.sev, td.code, td.where { white-space: nowrap; }
+  .sev-icon { display: inline-block; width: 1.2em; font-weight: 700; }
+  .sev-icon.error { color: var(--critical); }
+  .sev-icon.warning { color: var(--warning-ink); }
+  .where-link { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline;
+                font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
+  /* On a phone each finding is a block: severity, code and place on one line, the message below. */
+  @media (max-width: 600px) {
+    #findings-table, #findings-table tbody { display: block; }
+    #findings-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden;
+                            clip-path: inset(50%); white-space: nowrap; }
+    #findings-table tr { display: grid; grid-template-columns: auto auto 1fr; gap: 2px 12px;
+                         padding: 8px 10px; border-bottom: 1px solid var(--line); }
+    #findings-table td { border: 0; padding: 0; }
+    #findings-table td.message { grid-column: 1 / -1; }
+  }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+  footer p { margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>EUDR GeoJSON validator</h1>
+    <p class="lede">Checks a geolocation file against the European Commission's
+      <a href="https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html">EUDR
+      GeoJSON File Description</a>, and against the definition of geolocation in Article 2(28)
+      of Regulation (EU) 2023/1115, before the file is submitted. Errors breach the description;
+      warnings mark what passes the rules and is still probably wrong, such as coordinates
+      entered latitude first.</p>
+    <p class="privacy">Your file stays in this browser tab. The checks run here, in Python
+      compiled to WebAssembly (Pyodide): the first check downloads Python, up to 14 MB, from
+      jsDelivr, and the validator's source from this site. None of these requests carries any
+      part of your file. The plots are drawn without a map background, so no map server
+      learns where they are.</p>
+    <noscript><p>The checks need JavaScript. The command-line tool, <code>eudr-validate</code>,
+      runs the same checks without a browser.</p></noscript>
+  </header>
+
+  <section class="card" aria-label="File and rules">
+    <label class="drop" id="drop">
+      <span>Drop a GeoJSON file here, or</span>
+      <span class="button">choose a file</span>
+      <input type="file" id="file" accept=".geojson,.json,application/geo+json,application/json">
+    </label>
+    <div class="row">
+      <span class="label">Or try a sample:</span>
+      <button type="button" data-sample="data/valid_plots.geojson">a conformant file</button>
+      <button type="button" data-sample="data/edge_cases.geojson">a file with seven breaches</button>
+    </div>
+    <fieldset>
+      <legend>Rules</legend>
+      <label><input type="radio" name="type" value="I" checked> Type I: API or producer-level import; every property optional</label>
+      <label><input type="radio" name="type" value="II"> Type II: commodity-level import; ProducerCountry required in every Feature</label>
+      <label><input type="checkbox" id="cattle"> Cattle: the file describes establishments where cattle are kept, which Article 2(28) exempts from the polygon rule (G024)</label>
+      <label><input type="checkbox" id="strict"> Strict: a warning fails the file too</label>
+    </fieldset>
+  </section>
+
+  <p id="status" role="status" aria-live="polite"></p>
+
+  <section id="result" class="card" hidden aria-label="Result">
+    <div id="verdict" class="verdict"></div>
+    <div class="tools" id="tools">
+      <button type="button" id="download">Download the report (JSON)</button>
+      <span>The same report as <code>eudr-validate --json</code>.</span>
+    </div>
+    <div class="panes">
+      <figure>
+        <div id="map-box">
+          <svg id="map" role="img" aria-label="The file's plots"></svg>
+          <figcaption>
+            <span class="key"><svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true"><path class="error" d="M0,-6.5L6.5,0L0,6.5L-6.5,0Z"/></svg><span class="sev-icon error" aria-hidden="true">✕</span>error</span>
+            <span class="key"><svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true"><path class="warning" d="M0,-6L6.5,5L-6.5,5Z"/></svg><span class="sev-icon warning" aria-hidden="true">!</span>warning only</span>
+            <span class="key"><svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true"><circle class="none" r="5"/></svg>no finding</span>
+            <button type="button" id="view-button" hidden></button>
+          </figcaption>
+        </div>
+        <p id="map-note" class="note"></p>
+      </figure>
+      <div>
+        <h2 id="findings-title">Findings</h2>
+        <div class="table-wrap">
+          <table id="findings-table" role="table">
+            <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Severity</th><th scope="col" role="columnheader">Code</th><th scope="col" role="columnheader">Where</th><th scope="col" role="columnheader">Finding</th></tr></thead>
+            <tbody id="findings" role="rowgroup"></tbody>
+          </table>
+        </div>
+        <p id="rows-note" class="note"></p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p id="about">The checks are the code of the command-line tool <code>eudr-validate</code>:
+      <a href="https://github.com/aolagoke-dsae/eudr-geojson-validator">eudr-geojson-validator</a>.</p>
+    <p>Not legal advice. A file that passes here can still be refused by the EU Information
+      System, whose checks are the Commission's own and may change.</p>
+  </footer>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const MAX_BYTES = 25 * 1024 * 1024;   // the validator's own limit (G000)
+  const MAX_DRAWN = 3000;               // above this many features the map is left out
+  const MAX_ROWS = 2000;                // the table lists this many findings at most
+  const W = 640, PAD = 18;              // the map's width and margin, in its own units
+  const SVG = "http://www.w3.org/2000/svg";
+  const $ = (id) => document.getElementById(id);
+
+  const worker = new Worker("worker.js", { type: "module" });
+  worker.onerror = (event) => {         // the worker itself, or Python's loader, could not be fetched
+    event.preventDefault();
+    status("Python could not be loaded, so nothing was checked. Check the connection, then reload the page.");
+  };
+  let current = null;                   // the file: { name, bytes }
+  let latest = 0;                       // the id of the newest request
+  let started = null;                   // seconds Python took to start
+  let announced = false;                // whether the status line has said so
+  let report = null;                    // the newest report
+  let plot = null;                      // the map's data for that report
+  let focus = null;                     // the feature the map is zoomed to, or null
+  let wide = false;                     // whether the map takes in the features far from the rest
+
+  const status = (value) => { $("status").textContent = value; };
+  const count = (n) => n.toLocaleString("en");
+  const plural = (n, word) => `${count(n)} ${word}${n === 1 ? "" : "s"}`;
+  const size = (bytes) => bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB`
+                                              : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+  worker.onmessage = ({ data }) => {
+    if (data.type === "ready") {
+      started = data.seconds;
+      const link = document.createElement("a");
+      link.href = "https://github.com/aolagoke-dsae/eudr-geojson-validator";
+      link.textContent = "eudr-geojson-validator";
+      const tool = document.createElement("code");
+      tool.textContent = "eudr-validate";
+      $("about").replaceChildren(`Validator ${data.version}, the code of the command-line tool `, tool,
+        " (", link, `), with the rules of the ${data.specification}.`);
+      return;
+    }
+    if (data.id !== latest) return;     // the answer for an older file or option
+    if (data.type === "failure") {
+      $("result").hidden = true;        // the result shown belongs to an earlier check
+      status(`The check could not run: ${data.message.replace(/\.+$/, "")}. Try again, or reload the page.`);
+      return;
+    }
+    let line = `Checked ${current.name} (${size(current.bytes.byteLength)}) in ${data.seconds.toFixed(2)} s.`;
+    if (!announced && started !== null) {
+      line = `Python started in ${started.toFixed(1)} s. ${line}`;
+      announced = true;
+    }
+    status(line);
+    show(data.report);
+  };
+
+  // ── input ────────────────────────────────────────────────────────────────
+  function options() {
+    return {
+      fileType: document.querySelector('input[name="type"]:checked').value,
+      cattle: $("cattle").checked,
+      strict: $("strict").checked,
+    };
+  }
+
+  function check() {
+    if (!current) return;
+    latest += 1;
+    status(`Checking ${current.name}…` + (started === null
+      ? " The first check downloads Python, up to 14 MB, and starts it, which takes a few seconds." : ""));
+    worker.postMessage({ id: latest, bytes: current.bytes.slice(0), ...options() });
+  }
+
+  function take(name, bytes) {
+    current = { name, bytes };
+    check();
+  }
+
+  async function open(file) {
+    if (!file) return;
+    if (file.size > MAX_BYTES) {
+      latest += 1;                      // an answer still on its way is no longer wanted
+      $("result").hidden = true;
+      status(`${file.name} is ${size(file.size)}, above the validator's 25 MB limit (G000), so it was not read.`);
+      return;
+    }
+    take(file.name, await file.arrayBuffer());
+  }
+
+  $("file").addEventListener("change", (event) => {
+    open(event.target.files[0]);
+    event.target.value = "";            // the same file can be chosen again
+  });
+  const drop = $("drop");
+  drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (event) => {
+    event.preventDefault();
+    drop.classList.remove("over");
+    open(event.dataTransfer.files[0]);
+  });
+  document.querySelectorAll("button[data-sample]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const path = button.dataset.sample;
+      const response = await fetch(path);
+      if (!response.ok) { status(`The sample could not be loaded (${response.status}).`); return; }
+      take(path.split("/").pop(), await response.arrayBuffer());
+    });
+  });
+  document.querySelectorAll('input[name="type"], #cattle, #strict')
+    .forEach((input) => input.addEventListener("change", check));
+
+  $("download").addEventListener("click", () => {
+    if (!report || report.internal_error) return;
+    const blob = new Blob([JSON.stringify(report, null, 2) + "\n"], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${current.name.replace(/\.(geo)?json$/i, "")}.report.json`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // ── the report ───────────────────────────────────────────────────────────
+  function featureIndex(where) {
+    const match = /^features\[(\d+)\]/.exec(where || "");
+    return match ? Number(match[1]) : null;
+  }
+
+  function show(r) {
+    report = r;
+    $("result").hidden = false;
+    if (r.internal_error) {
+      $("verdict").replaceChildren(badge("warning", "!"),
+        text(`The validator itself failed (${r.internal_error}). This says nothing about the file; please report it.`));
+      $("tools").hidden = true;
+      $("findings").replaceChildren();
+      $("findings-title").textContent = "Findings";
+      $("rows-note").textContent = "";
+      plot = null;
+      focus = null;
+      wide = false;
+      render();
+      return;
+    }
+    $("tools").hidden = false;
+    const e = r.error_count, w = r.warning_count;
+    const rules = `Type ${r.file_type} rules` + (r.cattle ? ", cattle" : "") + (r.strict ? ", strict" : "");
+    const head = e ? [badge("error", "✕"), text("Not conformant")]
+      : !r.passed ? [badge("warning", "!"), text("Conformant, but rejected under strict")]
+      : [badge("ok", "✓"), text("Conformant")];
+    $("verdict").replaceChildren(...head, sub(`${plural(e, "error")}, ${plural(w, "warning")}; ${rules}.`));
+
+    const byFeature = new Map();        // feature index -> { worst, count }
+    for (const f of r.findings) {
+      const i = featureIndex(f.where);
+      if (i === null) continue;
+      const entry = byFeature.get(i) || { worst: "warning", count: 0 };
+      entry.count += 1;
+      if (f.severity === "ERROR") entry.worst = "error";
+      byFeature.set(i, entry);
+    }
+    $("findings").replaceChildren(...r.findings.slice(0, MAX_ROWS).map(row));
+    $("findings-title").textContent = r.findings.length ? `Findings (${count(r.findings.length)})` : "Findings: none";
+    $("rows-note").textContent = r.findings.length > MAX_ROWS
+      ? `The first ${count(MAX_ROWS)} are listed; the downloaded report has all ${count(r.findings.length)}.` : "";
+    plot = prepare(current.bytes, byFeature);
+    focus = null;
+    wide = false;
+    render();
+  }
+
+  function row(f) {
+    const i = featureIndex(f.where);
+    const severity = f.severity === "ERROR" ? "error" : "warning";
+    const tr = document.createElement("tr");
+    tr.setAttribute("role", "row");     // kept when a phone lays the row out as a block
+    let where;
+    if (i === null) {
+      where = text(f.where || "file");
+    } else {
+      tr.dataset.feature = String(i);
+      tr.addEventListener("click", () => select(i, "table"));
+      where = document.createElement("button");
+      where.type = "button";
+      where.className = "where-link";
+      where.textContent = f.where;
+      where.title = "Show this feature on the map";
+      where.addEventListener("click", (event) => { event.stopPropagation(); select(i, "table"); });
+    }
+    tr.append(cell("sev", icon(severity), severity === "error" ? "Error" : "Warning"),
+              cell("code", f.code), cell("where", where), cell("message", f.message));
+    return tr;
+  }
+
+  function select(i, from) {
+    document.querySelectorAll("#findings tr.selected").forEach((tr) => tr.classList.remove("selected"));
+    const rows = document.querySelectorAll(`#findings tr[data-feature="${i}"]`);
+    rows.forEach((tr) => tr.classList.add("selected"));
+    if (from === "map" && rows[0]) rows[0].scrollIntoView({ block: "nearest" });
+    if (!plot) return;
+    const shape = plot.shapes.get(i);
+    focus = shape && shape.drawable ? i : null;
+    render();
+    if (!shape || !shape.drawable) {
+      $("map-note").textContent = `features[${i}] has no position that can be drawn.`;
+    }
+    if (from === "table" && window.matchMedia("(max-width: 820px)").matches) {
+      $("map").scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  $("view-button").addEventListener("click", () => {
+    if (focus !== null) {               // back from one feature to the view before it
+      focus = null;
+      document.querySelectorAll("#findings tr.selected").forEach((tr) => tr.classList.remove("selected"));
+    } else {
+      wide = !wide;
+    }
+    render();
+  });
+
+  // ── the map: the file's own geometry, without a background ──────────────
+  function positionsOf(geometry) {
+    const points = [], polygons = [];
+    const good = (p) => Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number"
+      && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90;
+    const rings = (polygon) => polygon.map((ring) => ring.filter(good)).filter((ring) => ring.length);
+    if (geometry && typeof geometry === "object") {
+      const c = geometry.coordinates;
+      try {
+        if (geometry.type === "Point" && good(c)) points.push(c);
+        if (geometry.type === "MultiPoint") c.filter(good).forEach((p) => points.push(p));
+        if (geometry.type === "Polygon") polygons.push(rings(c));
+        if (geometry.type === "MultiPolygon") c.forEach((polygon) => polygons.push(rings(polygon)));
+      } catch (error) { /* coordinates not nested as the type requires: the rest is not drawn */ }
+    }
+    return { points, polygons: polygons.filter((p) => p.length) };
+  }
+
+  function labelOf(feature) {
+    const p = feature && feature.properties && typeof feature.properties === "object" ? feature.properties : {};
+    const name = [p.ProductionPlace, p.ProducerName].find((v) => typeof v === "string" && v.trim());
+    return name ? (name.length > 60 ? `${name.slice(0, 59)}…` : name) : "";
+  }
+
+  function prepare(bytes, byFeature) {
+    const out = { shapes: new Map(), byFeature, note: "", height: null, far: [] };
+    let features;
+    try {
+      const obj = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      features = obj && Array.isArray(obj.features) ? obj.features : [];
+    } catch (error) {
+      out.note = "Nothing to draw: the file could not be read as JSON.";
+      return out;
+    }
+    if (features.length > MAX_DRAWN) {
+      out.note = `The map is left out for files of more than ${count(MAX_DRAWN)} features; this one has ${count(features.length)}.`;
+      return out;
+    }
+    features.forEach((feature, i) => {
+      const shape = positionsOf(feature && feature.geometry);
+      shape.label = labelOf(feature);
+      shape.drawable = shape.points.length > 0 || shape.polygons.length > 0;
+      out.shapes.set(i, shape);
+    });
+    const drawable = [...out.shapes.entries()].filter(([, s]) => s.drawable);
+    if (!drawable.length) out.note = "No position to draw.";
+    out.far = farFeatures(drawable);
+    return out;
+  }
+
+  // A feature far from all the rest, such as a plot entered latitude first, would
+  // shrink the others to a dot. The first view leaves out up to one in ten, each
+  // at least 100 km and 25 times the usual distance from the middle of the rest.
+  function farFeatures(drawable) {
+    const median = (values) => {
+      const v = values.slice().sort((a, b) => a - b), m = v.length >> 1;
+      return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+    };
+    const centres = drawable.map(([i, s]) => {
+      const b = bounds([s]);
+      return [i, [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2]];
+    });
+    const middle = [median(centres.map(([, c]) => c[0])), median(centres.map(([, c]) => c[1]))];
+    const away = centres.map(([i, c]) => [i, km(middle, c)]);
+    const usual = median(away.map(([, d]) => d));
+    const far = away.filter(([, d]) => d > Math.max(25 * usual, 100)).sort((a, b) => a[1] - b[1]);
+    return far.length <= Math.max(1, Math.floor(drawable.length / 10)) ? far : [];
+  }
+
+  function km([lon1, lat1], [lon2, lat2]) {   // great-circle distance
+    const r = Math.PI / 180;
+    const a = Math.sin((lat2 - lat1) * r / 2) ** 2
+      + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin((lon2 - lon1) * r / 2) ** 2;
+    return 2 * 6371.0088 * Math.asin(Math.min(1, Math.sqrt(a)));
+  }
+
+  function distance(d) {
+    return d >= 1000 ? `${count(Math.round(d / 100) * 100)} km` : `${Math.round(d / 10) * 10} km`;
+  }
+
+  function bounds(shapes) {
+    const b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+    const add = ([lon, lat]) => {
+      b.x0 = Math.min(b.x0, lon); b.x1 = Math.max(b.x1, lon);
+      b.y0 = Math.min(b.y0, lat); b.y1 = Math.max(b.y1, lat);
+    };
+    for (const s of shapes) {
+      s.points.forEach(add);
+      s.polygons.forEach((polygon) => polygon.forEach((ring) => ring.forEach(add)));
+    }
+    return b;
+  }
+
+  // Equirectangular, true to scale at the view's middle latitude.
+  function projection(view, H) {
+    const k = Math.cos(((view.y0 + view.y1) / 2) * Math.PI / 180);
+    const w = Math.max((view.x1 - view.x0) * k, 1e-9), h = Math.max(view.y1 - view.y0, 1e-9);
+    const scale = Math.min((W - 2 * PAD) / w, (H - 2 * PAD) / h);
+    const ox = (W - w * scale) / 2, oy = (H - h * scale) / 2;
+    return { x: (lon) => ox + (lon - view.x0) * k * scale, y: (lat) => oy + (view.y1 - lat) * scale, w, h };
+  }
+
+  function render() {
+    const svg = $("map");
+    svg.replaceChildren();
+    const far = plot ? plot.far : [];
+    const button = $("view-button");
+    button.hidden = focus === null && !far.length;
+    button.textContent = focus !== null ? "Back" : wide ? "Back to the main group" : "Show all features";
+    let note = plot ? plot.note : "";
+    if (focus === null && !wide && far.length) {
+      note = far.length === 1
+        ? `features[${far[0][0]}] lies outside this view, about ${distance(far[0][1])} from the others.`
+        : `${far.length} features lie outside this view, ${distance(far[0][1])} to ${distance(far[far.length - 1][1])} from the others: `
+          + far.map(([i]) => `features[${i}]`).join(", ") + ".";
+    }
+    $("map-note").textContent = note;
+    const drawn = plot ? [...plot.shapes.entries()].filter(([, s]) => s.drawable) : [];
+    $("map-box").hidden = drawn.length === 0;
+    if (!drawn.length) return;
+
+    const isFar = new Set(far.map(([i]) => i));
+    const main = bounds(drawn.filter(([i]) => !isFar.has(i)).map(([, s]) => s));
+    const all = bounds(drawn.map(([, s]) => s));
+    if (plot.height === null) {         // one height per report, so a zoom does not move the page
+      const p = projection(main, 1e6);
+      plot.height = Math.round(Math.min(460, Math.max(220, (p.h / p.w) * (W - 2 * PAD) + 2 * PAD)));
+    }
+    const H = plot.height;
+    let view = wide ? all : main;
+    if (focus !== null) {               // the feature, half its size again on each side, at least 330 m across
+      const b = bounds([plot.shapes.get(focus)]);
+      const k = Math.cos(((b.y0 + b.y1) / 2) * Math.PI / 180);
+      const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+      const hx = Math.max((b.x1 - b.x0) * 0.8, 0.0015 / k), hy = Math.max((b.y1 - b.y0) * 0.8, 0.0015);
+      view = { x0: cx - hx, x1: cx + hx, y0: cy - hy, y1: cy + hy };
+    }
+    const { x: X, y: Y } = projection(view, H);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const shown = focus !== null ? `features[${focus}]`
+      : wide || !far.length ? plural(drawn.length, "feature")
+      : `${count(drawn.length - far.length)} of ${plural(drawn.length, "feature")}`;
+    svg.setAttribute("aria-label", `${shown} drawn from the file, without a map background`);
+
+    const kind = (i) => plot.byFeature.get(i)?.worst || "none";
+    const rank = (i) => (i === focus ? 3 : { error: 2, warning: 1, none: 0 }[kind(i)]);
+    drawn.sort(([a], [b]) => rank(a) - rank(b));   // errors on top, the selected feature above all
+    for (const [i, s] of drawn) {
+      const g = document.createElementNS(SVG, "g");
+      g.setAttribute("class", `shape ${kind(i)}${i === focus ? " selected" : ""}`);
+      g.dataset.feature = String(i);
+      const title = document.createElementNS(SVG, "title");
+      const n = plot.byFeature.get(i)?.count || 0;
+      title.textContent = `features[${i}]${s.label ? `, ${s.label}` : ""}: ${n ? plural(n, "finding") : "no finding"}`;
+      g.append(title);
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const polygon of s.polygons) {
+        const path = document.createElementNS(SVG, "path");
+        path.setAttribute("class", "area");
+        path.setAttribute("d", polygon.map((ring) => ring.map(([lon, lat], j) => {
+          const x = X(lon), y = Y(lat);
+          x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+          return `${j ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join("") + "Z").join(""));
+        g.append(path);
+      }
+      // Points, and polygons too small to see at this scale, get a marker.
+      const marks = s.points.map(([lon, lat]) => [X(lon), Y(lat)]);
+      if (s.polygons.length && x1 - x0 < 8 && y1 - y0 < 8) marks.push([(x0 + x1) / 2, (y0 + y1) / 2]);
+      for (const [x, y] of marks) g.append(marker(x, y, kind(i)));
+      g.addEventListener("click", () => select(i, "map"));
+      svg.append(g);
+    }
+  }
+
+  function marker(x, y, kind) {
+    const el = document.createElementNS(SVG, kind === "none" ? "circle" : "path");
+    if (kind === "error") {             // a diamond
+      el.setAttribute("d", `M${x.toFixed(1)},${(y - 7).toFixed(1)}l7,7l-7,7l-7,-7z`);
+    } else if (kind === "warning") {    // a triangle
+      el.setAttribute("d", `M${x.toFixed(1)},${(y - 7).toFixed(1)}l7.5,12h-15z`);
+    } else {
+      el.setAttribute("cx", x.toFixed(1));
+      el.setAttribute("cy", y.toFixed(1));
+      el.setAttribute("r", "5.5");
+    }
+    el.setAttribute("class", "mark");
+    return el;
+  }
+
+  // ── small helpers ─────────────────────────────────────────────────────────
+  function badge(kind, symbol) {
+    const span = document.createElement("span");
+    span.className = `badge ${kind}`;
+    span.setAttribute("aria-hidden", "true");
+    span.textContent = symbol;
+    return span;
+  }
+  function text(value) { const span = document.createElement("span"); span.textContent = value; return span; }
+  function sub(value) { const span = text(value); span.className = "sub"; return span; }
+  function icon(severity) {
+    const span = document.createElement("span");
+    span.className = `sev-icon ${severity}`;
+    span.setAttribute("aria-hidden", "true");
+    span.textContent = severity === "error" ? "✕" : "!";
+    return span;
+  }
+  function cell(className, ...content) {
+    const td = document.createElement("td");
+    td.setAttribute("role", "cell");
+    if (className) td.className = className;
+    td.append(...content);
+    return td;
+  }
+})();
+</script>
+</body>
+</html>
