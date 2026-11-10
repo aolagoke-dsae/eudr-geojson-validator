@@ -3,24 +3,61 @@
 Checks a GeoJSON file against the European Commission's **EUDR GeoJSON File
 Description** — the format in which geolocation data for commodity plots is
 submitted under Regulation (EU) 2023/1115 — and against the Regulation's own
-definition of geolocation in Article 2(28).
+definition of geolocation in Article 2(28), before the file is submitted.
 
-The Commission publishes the description twice, with separate version
-numbers: as a PDF, version 1.5, dated 5 May 2025, and online in the EUDR
-Information System's API reference, [version 1.3, updated 29 May 2026](https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html).
-This validator started from the PDF and follows the online version, the newer
-of the two, wherever they differ; its numbered list of errors is the one the
-codes below cite. The online version was checked on 10 and 18 October 2026,
-and on 10 November 2026 it was still version 1.3.
+**[Try it in your browser](https://aolagoke-dsae.github.io/eudr-geojson-validator/)**:
+the same code, and the file stays on your machine.
 
 [![validate](https://github.com/aolagoke-dsae/eudr-geojson-validator/actions/workflows/validate.yml/badge.svg)](https://github.com/aolagoke-dsae/eudr-geojson-validator/actions/workflows/validate.yml)
 
+## Why now
+
+The EUDR applies from 30 December 2026 to large and medium operators and
+traders, and from 30 June 2027 to micro and small enterprises (from
+30 December 2026 for those the EU Timber Regulation already covered). These
+are the dates of its second amendment, [Regulation (EU) 2025/2650](https://eur-lex.europa.eu/eli/reg/2025/2650/oj/eng)
+of 19 December 2025, as the [Commission's EUDR page](https://environment.ec.europa.eu/topics/forests/deforestation/regulation-deforestation-free-products_en)
+gave them on 10 November 2026. Every due diligence statement carries the
+geolocation of the plots a commodity came from, and the EU Information System
+takes it as a GeoJSON file in the format the File Description sets out. The
+description lists the errors the system raises on a file that departs from
+it. Whether a file conforms is a question with a definite answer, and the
+answer should come before the file is submitted rather than after it is
+rejected.
+
+## Install and run
+
 ```bash
-python -m src.validate_geojson data/valid_plots.geojson
-python -m src.validate_geojson data/edge_cases.geojson --json
-python -m src.validate_geojson my_plots.geojson --strict   # warnings fail too
-python -m src.validate_geojson my_plots.geojson --type II  # commodity-level import
-python -m src.validate_geojson my_herds.geojson --cattle   # cattle: no polygon rule
+pip install git+https://github.com/aolagoke-dsae/eudr-geojson-validator
+eudr-validate my_plots.geojson
+```
+
+Python 3.10 or later, and nothing beyond its standard library. On
+`data/edge_cases.geojson`, the repository's file of seven breaches and one
+plot entered latitude first:
+
+```text
+$ eudr-validate data/edge_cases.geojson
+ERROR G016 [features[0]]: Polygon ring is not closed: the last position must repeat the first.
+ERROR G014 [features[1]]: Polygon declares 1 interior ring(s). Interior rings are not permitted.
+WARNING G013 [features[2]]: 6 coordinate value(s) carry more than 6 decimal places (e.g. -6.4318801234). The EU system truncates to 6 before storing, so the extra digits are discarded.
+ERROR G028 [features[2]]: Positions 0 and 1 differ as written but become the same point, (-6.431880, 6.895020), after truncation to 6 decimals. The EU system reduces coordinates to six decimals and rejects the duplicate.
+ERROR G024 [features[3]]: Area 11.8 ha exceeds 4 ha. Regulation (EU) 2023/1115, Art. 2(28), requires polygons for plots of more than four hectares used for commodities other than cattle. If this file describes cattle establishments, run with --cattle.
+ERROR G007 [features[4]]: Geometry type 'LineString' is not permitted. Allowed: Point, MultiPoint, Polygon, MultiPolygon.
+ERROR G031 [features[5]]: The ring crosses or touches itself: sides 0 and 2 meet. The EC lists crossing lines, such as a figure eight, among the errors its system raises (item 1).
+ERROR G019 [features[6]]: ProducerCountry 'UK' is not an ISO 3166-1 alpha-2 code. ISO 3166-1 writes GB. The EC lists an invalid producer country code among the errors its system raises (item 12).
+WARNING G026 [features[7]]: Position (6.895020, -6.430110) lies outside the bounding box of declared country CI. The pair reads correctly when reversed, so the coordinates are probably latitude-first.
+
+7 error(s), 2 warning(s); Type I rules.
+NOT conformant
+```
+
+```bash
+eudr-validate my_plots.geojson --strict   # warnings fail too
+eudr-validate my_plots.geojson --type II  # commodity-level import
+eudr-validate my_herds.geojson --cattle   # cattle: no polygon rule
+eudr-validate my_plots.geojson --json     # the report as JSON
+eudr-validate --version                   # version and specification
 ```
 
 | Exit code | Meaning |
@@ -30,15 +67,47 @@ python -m src.validate_geojson my_herds.geojson --cattle   # cattle: no polygon 
 | `2` | The command line is wrong, or the file cannot be read |
 | `3` | The validator itself failed: an internal error, which says nothing about the file |
 
-With `--strict` and warnings only, the last line says so — `conformant, but
-rejected under --strict` — instead of the bare `conformant` that 1.1 printed
-while exiting `1`. `--json` adds `strict`, `cattle` and `passed` to the report.
+The run above exits `1`. With `--strict` and warnings only, the last line says
+so — `conformant, but rejected under --strict` — instead of the bare
+`conformant` that 1.1 printed while exiting `1`. `--json` adds `strict`,
+`cattle` and `passed` to the report. From Python, `validate_file` and
+`validate_obj` run the same checks and return the report:
 
-## Why it exists
+```python
+from eudr_geojson_validator import validate_file
 
-The specification is a published document. Whether a file conforms to it is a
-question with a definite answer, and that answer should be available before
-the file is submitted anywhere rather than after it is rejected.
+report = validate_file("my_plots.geojson", file_type="II")
+print(report.ok, [str(finding) for finding in report.errors])
+```
+
+## In the browser
+
+[The demo](https://aolagoke-dsae.github.io/eudr-geojson-validator/) runs this
+package's `validate.py`, unchanged, in Pyodide: Python compiled to
+WebAssembly. A file dropped on the page is read in the browser tab and goes
+nowhere. The page fetches Python (up to 14 MB, from jsDelivr), the
+validator's source and the two sample files, and nothing else. It draws the
+plots without a map background, so no map server learns where they are,
+shows each finding beside its plot, and offers the report as the same JSON as
+`eudr-validate --json`.
+
+It is slower than the command line (see **Speed**). `tools/check_demo.js`,
+run by hand, holds the demo to the command line in headless Chromium: the
+same findings, word for word, the same JSON report, and no request that
+carries any part of the file.
+
+## Which specification
+
+The Commission publishes the description twice, with separate version
+numbers: as a PDF, version 1.5, dated 5 May 2025, and online in the EUDR
+Information System's API reference, [version 1.3, updated 29 May 2026](https://eudr.webcloud.ec.europa.eu/tracesnt/help/eudr-documentation/operator/geojson-description.html).
+This validator started from the PDF and follows the online version, the newer
+of the two, wherever they differ; its numbered list of errors is the one the
+codes below cite. The online version was checked on 10 and 18 October 2026,
+and on 10 November 2026 it was still version 1.3. The validator's own version,
+1.3.0, numbers its releases and not the Commission's documents; `--version`,
+the JSON report's `specification` field and the demo name the document it
+follows in full.
 
 ## Two kinds of finding
 
@@ -146,12 +215,22 @@ Shapely passes 13 rings the validator flags: each is degenerate exactly as
 written and not in binary floating point, where 6.8003 is not quite 6.8003.
 The validator decides on the numbers as written.
 
+## Speed
+
 `tools/timing.py` writes its own files and times the check on them. On a
 laptop (Intel Core i7-1165G7, Python 3.10, in a Linux virtual machine) on
 10 November 2026: 10,000 polygons of 30 corners, 7.9 MB, in 13 seconds;
 40,000 polygons of 10 corners, 14.5 MB, in 15 seconds; one ring of 5,000
-positions in 0.4 seconds. The README of 1.2 gave faster figures, from files
+positions in 0.4 seconds. Those runs came before 1.3.0's depth check, which
+reads the whole file once before parsing it and took a further quarter of a
+second on the 14.5 MB file. The README of 1.2 gave faster figures, from files
 and a machine it did not record.
+
+The browser takes about twice as long on the two large files. On one cloud
+machine (Intel Xeon, 2.1 GHz, two cores) the command line, under Python 3.13,
+checked the three files in 7.3, 11.8 and 0.17 seconds; the demo, in headless
+Chromium with Pyodide 314.0.7 and Python 3.14, took 13 to 17, 22 to 23, and
+0.4 to 0.6 seconds in two sessions.
 
 ## The four-hectare rule and cattle
 
@@ -171,6 +250,11 @@ plot is compliant. It does not connect to TRACES or the EUDR Information
 System, and it submits nothing. It does not validate the non-geographic parts
 of a Due Diligence Statement. It checks one file against one published
 schema, and it says where that file departs from it.
+
+It is not legal advice. A file it passes can still be refused by the EU
+Information System, whose checks are the Commission's own and can change, and
+a conforming file says nothing about whether the products it covers comply
+with the Regulation.
 
 The country bounding boxes cover thirty-four commodity-producing
 countries. A record declaring a country outside that list gets no G026 check,
@@ -208,9 +292,10 @@ python -m pytest -q        # 91 passed
 Most tests hold the specification and the Regulation, each beside the text it
 follows; the rest hold the warning layer, the area computation against a
 closed-form area, the command line and its exit codes, and the shipped
-fixtures. `data/edge_cases.geojson` contains eight deliberate defects, and CI
-asserts that it **keeps failing**. A validator that silently stops catching
-things is worse than no validator, because it is trusted.
+fixtures. `data/edge_cases.geojson` holds seven deliberate breaches and one
+plot entered latitude first, and CI asserts that it **keeps failing**. A
+validator that silently stops catching things is worse than no validator,
+because it is trusted.
 
 `tools/mutants.py` holds 59 mutants of the validator, copies with one rule
 reverted or weakened, and runs the suite against each: every mutant makes at
@@ -221,16 +306,48 @@ has a test now. The 50 mutants 1.2 was checked against were not kept, which is
 why the set is a script now. An audit of version 1.0 found 35 of its 48
 mutants surviving, among them an area computation multiplied by ten.
 
+`tools/check_demo.js` holds the browser demo to the command line's answers
+(see **In the browser**); with the depth check switched off, three of its
+checks fail.
+
 `data/valid_plots.geojson` uses clearly-labelled test identities. It is not
 derived from any real operator.
 
 ## Status
 
-Version 1.2, 18 October 2026. The gaps above are known and listed rather than
-discovered. Runtime dependencies: none beyond the Python standard library. CI
-runs the suite on Python 3.10, 3.11 and 3.12.
+Version 1.3.0, 10 November 2026. The gaps above are known and listed rather
+than discovered. Runtime dependencies: none beyond the Python standard
+library. CI runs the tests and the installed command on Python 3.10 to 3.14,
+on Linux and on Windows, on every push and every Monday, and builds the
+package; a second workflow tests on Python 3.14 and publishes the demo when
+the validator, its samples or the demo change.
 
 ## Changes
+
+**1.3.0 — 10 November 2026.** A package with its own command, a browser demo,
+and two tracebacks turned into answers:
+
+- installable with pip, with the command `eudr-validate`;
+  `python -m eudr_geojson_validator` works too, and so, for now, does
+  `python -m src.validate_geojson`;
+- the version is the validator's own. 1.2 reported `"spec_version": "1.5"`,
+  the PDF's number, while it followed the online version 1.3; the JSON report
+  now has `specification`, which names the document in full, and `--version`
+  gives both;
+- a file nested more than 100 levels deep is G001, found before the file is
+  parsed, so the answer is the same on every Python and in the browser; 1.2
+  stopped with a RecursionError traceback and exit code `1`;
+- a fault in the validator itself exits `3`, not `1`, which a pipeline would
+  read as a verdict on the file;
+- CI on Python 3.10 to 3.14, on Linux and Windows, weekly as well as on every
+  push, with the package built and its wheel installed in a clean
+  environment;
+- `tools/mutants.py`, `tools/compare_shapely.py` and `tools/timing.py`
+  reproduce the claims above; the suite grows from 69 tests to 91, and all 59
+  mutants are killed;
+- the browser demo, on GitHub Pages, and `tools/check_demo.js`;
+- the README gives the dates the EUDR applies from, a sample run, and the
+  line that this is not legal advice.
 
 **1.2 — 18 October 2026.** The eight gaps 1.1 listed are closed:
 
