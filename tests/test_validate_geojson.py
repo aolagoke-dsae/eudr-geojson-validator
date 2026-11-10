@@ -18,11 +18,13 @@ trusted.
 """
 import json
 import math
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from src.validate_geojson import (
+from eudr_geojson_validator.validate import (
     EARTH_RADIUS_M, _measured_area_ha, main, validate_file, validate_obj,
 )
 
@@ -635,7 +637,7 @@ def test_deep_nesting_inside_the_coordinates(tmp_path, depth):
 
 def test_a_fault_in_the_validator_exits_3_not_1(monkeypatch, capsys):
     """A bug in the validator must not read as a verdict on the file."""
-    import src.validate_geojson as V
+    import eudr_geojson_validator.validate as V
 
     def broken(*args, **kwargs):
         raise KeyError("a bug")
@@ -649,7 +651,7 @@ def test_json_output_states_the_verdict(capsys):
     main([str(DATA / "valid_plots.geojson"), "--json", "--strict"])
     out = json.loads(capsys.readouterr().out)
     assert out["conformant"] is True and out["passed"] is False
-    assert out["strict"] is True and out["validator_version"] == "1.2"
+    assert out["strict"] is True and out["validator_version"] == "1.3.0"
     # Named in full: the EC's PDF and online page carry separate version numbers.
     assert out["specification"] == ("EUDR GeoJSON File Description, online "
                                     "version 1.3 (29 May 2026)")
@@ -684,7 +686,7 @@ def test_a_repeated_geometry_warns():
 
 def test_a_file_above_the_size_limit_is_refused(tmp_path, monkeypatch):
     """A smaller limit stands in for the 25 MB one here."""
-    import src.validate_geojson as V
+    import eudr_geojson_validator.validate as V
     monkeypatch.setattr(V, "MAX_FILE_BYTES", 100)
     path = write(tmp_path, json.dumps(collection(base_feature())))
     assert path.stat().st_size > 100
@@ -692,6 +694,33 @@ def test_a_file_above_the_size_limit_is_refused(tmp_path, monkeypatch):
 
 
 def test_the_size_limit_is_25_megabytes():
-    import src.validate_geojson as V
+    import eudr_geojson_validator.validate as V
     assert V.MAX_FILE_BYTES == 25 * 1024 * 1024
 
+
+
+def test_the_command_of_versions_1_0_to_1_2_still_runs():
+    """`python -m src.validate_geojson` from a checkout, as the README of 1.2
+    and pipelines written for it call it."""
+    root = DATA.parent
+    for name, code in (("valid_plots.geojson", 0), ("edge_cases.geojson", 1)):
+        run = subprocess.run([sys.executable, "-m", "src.validate_geojson",
+                              str(DATA / name)], cwd=root, capture_output=True, text=True)
+        assert run.returncode == code, run.stderr
+
+
+def test_the_package_runs_as_a_module():
+    run = subprocess.run([sys.executable, "-m", "eudr_geojson_validator",
+                          str(DATA / "valid_plots.geojson"), "--json"],
+                         cwd=DATA.parent, capture_output=True, text=True)
+    assert run.returncode == 0 and json.loads(run.stdout)["passed"] is True
+
+
+def test_the_version_names_the_validator_and_the_document(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    # argparse wraps the line to the terminal's width
+    assert " ".join(capsys.readouterr().out.split()) == (
+        "eudr-validate 1.3.0; EUDR GeoJSON File Description, online version 1.3 "
+        "(29 May 2026)")
