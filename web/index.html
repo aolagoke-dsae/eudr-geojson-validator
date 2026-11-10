@@ -178,9 +178,9 @@
       warnings mark what passes the rules and is still probably wrong, such as coordinates
       entered latitude first.</p>
     <p class="privacy">Your file stays in this browser tab. The checks run here, in Python
-      compiled to WebAssembly (Pyodide): the first check downloads Python, up to 14 MB, from
-      jsDelivr, and the validator's source from this site. None of these requests carries any
-      part of your file. The plots are drawn without a map background, so no map server
+      compiled to WebAssembly (Pyodide): as it opens, the page downloads Python, up to 14 MB,
+      from jsDelivr, and the validator's source from this site. None of these requests carries
+      any part of your file. The plots are drawn without a map background, so no map server
       learns where they are.</p>
     <noscript><p>The checks need JavaScript. The command-line tool, <code>eudr-validate</code>,
       runs the same checks without a browser.</p></noscript>
@@ -288,6 +288,10 @@
       tool.textContent = "eudr-validate";
       $("about").replaceChildren(`Validator ${data.version}, the code of the command-line tool `, tool,
         " (", link, `), with the rules of the ${data.specification}.`);
+      if (!current) {                   // no file chosen yet: say so now, not with the first report
+        status(`Python is ready; it started in ${started.toFixed(1)} s.`);
+        announced = true;
+      }
       return;
     }
     if (data.id !== latest) return;     // the answer for an older file or option
@@ -318,7 +322,7 @@
     if (!current) return;
     latest += 1;
     status(`Checking ${current.name}…` + (started === null
-      ? " The first check downloads Python, up to 14 MB, and starts it, which takes a few seconds." : ""));
+      ? " Python is still loading, which can take up to a minute on a slow connection." : ""));
     worker.postMessage({ id: latest, bytes: current.bytes.slice(0), ...options() });
   }
 
@@ -360,6 +364,11 @@
   });
   document.querySelectorAll('input[name="type"], #cattle, #strict')
     .forEach((input) => input.addEventListener("change", check));
+
+  // Python loads as the page opens, so most of the wait passes while the page is read.
+  status("Loading Python in the background: up to 14 MB from jsDelivr on a first visit, "
+    + "which can take up to a minute on a slow connection.");
+  worker.postMessage({ type: "start" });
 
   $("download").addEventListener("click", () => {
     if (!report || report.internal_error) return;

@@ -48,6 +48,15 @@ async function start() {
 }
 
 self.onmessage = async ({ data }) => {
+  if (data.type === "start") {          // the page has opened: load Python before the first file
+    try {
+      ready = ready || start();
+      await ready;
+    } catch (error) {
+      ready = null;                     // the first file tries again, and reports what fails
+    }
+    return;
+  }
   try {
     ready = ready || start();
     const pyodide = await ready;

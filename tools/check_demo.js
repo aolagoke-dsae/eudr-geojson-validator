@@ -6,13 +6,14 @@
 // Assembles the site as .github/workflows/pages.yml does, serves it on
 // 127.0.0.1, and answers the page's requests for Pyodide from node_modules
 // instead of jsDelivr; any other request outside the site is recorded and
-// refused. Then: the file with seven breaches must give the command line's
-// findings, word for word, and its downloaded report must equal
-// `eudr-validate --json`; the conformant file must pass, and fail under
-// --strict; --cattle must drop G024; nesting past 100 levels must be G001 and
-// not a crash; and no request may carry a body or leave the site and jsDelivr.
-// Exits 0 when every check passes. PYTHON names the interpreter (default
-// python3, or python on Windows).
+// refused. Then: Python must load as the page opens, before any file is
+// chosen; the file with seven breaches must give the command line's findings,
+// word for word, and its downloaded report must equal `eudr-validate --json`;
+// the conformant file must pass, and fail under --strict; --cattle must drop
+// G024; nesting past 100 levels must be G001 and not a crash; and no request
+// may carry a body or leave the site and jsDelivr. Exits 0 when every check
+// passes. PYTHON names the interpreter (default python3, or python on
+// Windows).
 const { chromium } = require("playwright");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
@@ -101,17 +102,18 @@ function cliReport(file) {
   const act = async (action, timeout = 120000) => {
     await page.evaluate(() => { document.getElementById("status").textContent = "…"; });
     await action();
-    await page.waitForFunction(() => {
-      const s = document.getElementById("status").textContent;
-      return s !== "…" && !s.startsWith("Checking");
-    }, null, { timeout });
+    await page.waitForFunction(() => /Checked |could not|limit/.test(document.getElementById("status").textContent),
+      null, { timeout });
   };
   const verdict = async () => (await page.locator("#verdict").innerText()).replace(/\s+/g, " ").trim();
   const rows = () => page.$$eval("#findings tr", (trs) => trs.map((tr) => [...tr.children].map((td) => td.innerText.trim())));
   const upload = (name, text) => act(() => page.setInputFiles("#file",
     { name, mimeType: "application/geo+json", buffer: Buffer.from(text) }));
 
-  await act(() => page.click("text=a file with seven breaches"), 180000);
+  await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Python is ready"),
+    null, { timeout: 180000 });
+  expect("Python loads as the page opens, before any file is chosen", true);
+  await act(() => page.click("text=a file with seven breaches"));
   let found = await rows();
   expect("seven breaches: 7 errors, 2 warnings", (await verdict()).startsWith("✕ Not conformant 7 errors, 2 warnings"));
   expect("the command line's findings, in its order", JSON.stringify(found.map((r) => [r[1], r[2], r[3]]))

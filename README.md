@@ -85,8 +85,10 @@ print(report.ok, [str(finding) for finding in report.errors])
 [The demo](https://aolagoke-dsae.github.io/eudr-geojson-validator/) runs this
 package's `validate.py`, unchanged, in Pyodide: Python compiled to
 WebAssembly. A file dropped on the page is read in the browser tab and goes
-nowhere. The page fetches Python (up to 14 MB, from jsDelivr), the
-validator's source and the two sample files, and nothing else. It draws the
+nowhere. As it opens, the page fetches Python (up to 14 MB, from jsDelivr)
+and the validator's source, then a sample file if one is asked for, and
+nothing else. A first visit can take up to a minute on a slow connection;
+after that the browser usually has Python in its cache. The page draws the
 plots without a map background, so no map server learns where they are,
 shows each finding beside its plot, and offers the report as the same JSON as
 `eudr-validate --json`.
