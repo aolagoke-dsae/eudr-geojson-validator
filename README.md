@@ -387,4 +387,5 @@ and the Regulation, after an audit found them backwards:
 
 ## Licence
 
-MIT.
+MIT. To cite it: [`CITATION.cff`](CITATION.cff), shown by GitHub as *Cite
+this repository*.
